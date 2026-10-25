@@ -19,6 +19,22 @@ echo -e "${CYAN}====================================================${NC}"
 echo -e "${GREEN}   📱 Phone as GPU: Local AI Hub Automated Setup    ${NC}"
 echo -e "${CYAN}====================================================${NC}"
 
+# 0. Auto-Bootstrap: If executed outside repo (e.g. via curl), clone the repo automatically
+REPO_DIR="$HOME/Android-GPU"
+if [ ! -f "app.py" ] || [ ! -d "web" ]; then
+    echo -e "${YELLOW}[*] Preparing environment and cloning Android-GPU repository...${NC}"
+    pkg update -y
+    pkg install -y git
+    if [ ! -d "$REPO_DIR" ]; then
+        git clone https://github.com/AbuZar-Ansarii/Android-GPU.git "$REPO_DIR"
+    else
+        cd "$REPO_DIR" && git pull origin main || true
+    fi
+    cd "$REPO_DIR"
+    chmod +x setup_termux.sh
+    exec bash setup_termux.sh
+fi
+
 # 1. Acquire Wake-Lock to keep phone CPU active in background
 if command -v termux-wake-lock >/dev/null 2>&1; then
     echo -e "${BLUE}[*] Acquiring CPU wake-lock (prevents sleeping)...${NC}"

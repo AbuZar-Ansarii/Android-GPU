@@ -9,26 +9,60 @@
 
 **Offload local LLM compute, neural execution, and RAM allocation directly to your Android smartphone over high-speed USB or Wi-Fi.**
 
-[Features](#-key-features) • [Architecture](#-system-architecture) • [Quick Start](#-quick-start) • [Model Catalog](#-recommended-models) • [API Guide](#-openai-api-integration)
+[⚡ 1-Command Setup](#-1-command-phone-setup) • [Features](#-key-features) • [Architecture](#-system-architecture) • [Model Catalog](#-recommended-models) • [API Guide](#-openai-api-integration)
 
 </div>
 
 ---
 
-## 📌 Overview
+## ⚡ 1-Command Phone Setup
 
-Most budget or older laptops are bottlenecked by low-core CPUs (e.g. dual-core processors) and limited RAM, making local Large Language Model (LLM) execution slow and causing fans to throttle constantly. 
+Open **Termux** on your phone, paste this single command, and press Enter:
 
-Modern Android smartphones (such as devices powered by Snapdragon or MediaTek Dimensity processors) pack **8-core ARM CPUs, high-speed unified LPDDR4X/LPDDR5 RAM (8GB–16GB), and dedicated NPUs/GPUs**. 
+```bash
+curl -sL https://raw.githubusercontent.com/AbuZar-Ansarii/Android-GPU/main/setup_termux.sh | bash
+```
 
-**Android-GPU** turns your smartphone into a dedicated local AI hardware accelerator for your PC. It compiles and runs an optimized `llama.cpp` inference engine on the phone and exposes both an **aesthetic modern Web UI** and a standard **OpenAI-compatible REST API** to your PC over zero-latency USB tunneling or local Wi-Fi.
+> **What this one command does automatically:**
+> 1. Clones the Android-GPU repository.
+> 2. Acquires CPU wake-lock (keeps the model alive in the background).
+> 3. Installs dependencies and compiles `llama.cpp` using all phone CPU cores.
+> 4. Gives you an interactive menu to choose & download a model (135M to 3B).
+> 5. Launches the Web UI & OpenAI-compatible server at `http://localhost:8080`.
+
+*(Alternative without curl:* `pkg update -y && pkg install -y git && git clone https://github.com/AbuZar-Ansarii/Android-GPU.git ~/Android-GPU && cd ~/Android-GPU && bash setup_termux.sh`*)*
+
+---
+
+## 💻 1-Step PC Connection
+
+Connect your phone to your PC via USB (with **USB Debugging** enabled in Developer Options) and run:
+
+* **On Windows:** Double-click **`start_pc_bridge.bat`** (it forwards the port and opens the browser automatically).
+* **On Linux / macOS:** Run:
+  ```bash
+  adb forward tcp:8080 tcp:8080
+  ```
+  Then open: **`http://localhost:8080`**
+
+*(Or connect wirelessly over the same Wi-Fi using `http://<PHONE_IP>:8080`)*
+
+---
+
+## 📌 Why Android-GPU?
+
+Most budget or older laptops are bottlenecked by low-core CPUs (e.g. dual-core processors) and limited RAM, making local Large Language Model (LLM) execution slow and causing laptop fans to throttle constantly.
+
+Modern Android smartphones pack **8-core ARM CPUs, high-speed unified LPDDR4X/LPDDR5 RAM (8GB–16GB), and fast UFS storage**. 
+
+**Android-GPU** turns your phone into an external AI accelerator: your PC handles the user interface, while your phone's processor and RAM do 100% of the heavy token generation.
 
 ---
 
 ## 🚀 Key Features
 
 * **📱 Pure On-Device Execution:** 100% offline, zero cloud subscriptions, zero telemetry.
-* **⚡ High-Speed USB Tunneling (ADB):** Connect via USB cable with `adb forward` for zero-latency, rock-solid token streaming without depending on local network speeds.
+* **⚡ High-Speed USB Tunneling (ADB):** Connect via USB cable for zero-latency token streaming without depending on local network speeds.
 * **🌐 Wireless Local Wi-Fi:** Roam freely and access the model on any browser across your local network.
 * **🎨 Industrial Matte & Crimson UI:**
   * Engineered dark matte grey (`#111215`) with high-contrast needle crimson red (`#e63946`) aesthetic.
@@ -85,78 +119,12 @@ Android-GPU/
 ├── web/
 │   └── index.html           # Modern responsive Web UI (Dark/Light, Sidebar, Model Manager)
 ├── app.py                   # Zero-dependency Python manager & OpenAI proxy
-├── setup_termux.sh          # Automated Termux setup, compiler & model downloader
+├── setup_termux.sh          # Self-bootstrapping setup, compiler & model downloader
 ├── install_to_phone.bat     # Windows 1-click script to push project files via ADB
 ├── start_pc_bridge.bat      # Windows 1-click USB port forwarding & browser launcher
 ├── .gitignore               # Model weights and temporary cache exclusion
 └── README.md                # Comprehensive documentation
 ```
-
----
-
-## ⚡ Quick Start
-
-### Prerequisites
-1. **Android Smartphone:** Android 8.0+ with **[Termux](https://f-droid.org/en/packages/com.termux/)** installed from F-Droid (do not use Google Play Store version).
-2. **PC:** Windows, macOS, or Linux with `adb` (Android Debug Bridge) installed.
-
----
-
-### Step 1: Enable USB Debugging on Phone
-1. Go to **Settings** $\rightarrow$ **About Phone** and tap **Build Number** 7 times to unlock Developer Options.
-2. Go to **Settings** $\rightarrow$ **System** $\rightarrow$ **Developer Options** and enable **USB Debugging**.
-3. Connect your phone to your PC with a USB cable and tap **Allow** when prompted for authorization.
-
----
-
-### Step 2: Transfer Files to Phone
-
-#### On Windows:
-Double-click **`install_to_phone.bat`**.
-
-#### On Linux / macOS:
-```bash
-adb shell mkdir -p /sdcard/Download/PhoneAsGPU
-adb push setup_termux.sh /sdcard/Download/PhoneAsGPU/
-adb push app.py /sdcard/Download/PhoneAsGPU/
-adb push web /sdcard/Download/PhoneAsGPU/
-```
-
----
-
-### Step 3: Run Setup in Termux
-Open the **Termux** app on your phone and run:
-
-```bash
-termux-setup-storage
-cp -r ~/storage/downloads/PhoneAsGPU ~/
-cd ~/PhoneAsGPU && chmod +x setup_termux.sh && ./setup_termux.sh
-```
-
-1. The script automatically acquires an Android CPU wake-lock (to prevent sleeping), updates packages, and compiles `llama.cpp` using all available phone CPU cores.
-2. When prompted, select a starting model to download (e.g. `1` for SmolLM2 135M or `4` for Llama 3.2 1B).
-3. The server starts automatically on port `8080`.
-
----
-
-### Step 4: Connect from PC
-
-#### Option A: High-Speed USB Connection (Recommended)
-On Windows, double-click **`start_pc_bridge.bat`**. 
-
-*(Or manually run in terminal: `adb forward tcp:8080 tcp:8080`)*
-
-Then open your PC browser:
-```text
-http://localhost:8080
-```
-
-#### Option B: Wireless Wi-Fi
-Ensure your PC and phone are on the same Wi-Fi network. Open in your PC browser:
-```text
-http://<PHONE_IP>:8080
-```
-*(Your phone's Wi-Fi IP is printed directly in the Termux terminal output.)*
 
 ---
 
