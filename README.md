@@ -178,19 +178,42 @@ Android-GPU/
 
 ---
 
-## 📊 Recommended Models
+## 📊 Recommended Models by Phone RAM Tier
 
-Always look for **`Q4_K_M`** (4-bit quantization) GGUF files for the optimal intelligence-to-memory ratio:
+Choose a model matched to your phone's total RAM capacity. Using 4-bit (`Q4_K_M`) quantization leaves plenty of headroom for Android OS background services:
 
-| Model | Parameters | Quantization | RAM Usage | Best Suited For |
+### 🟢 Tier 1: For Phones with 3 GB – 4 GB RAM
+*Best for ultra-fast token generation, basic assistant tasks, and minimal memory usage.*
+
+| Model | Parameters | Quantization | RAM Footprint | Strengths |
 | :--- | :--- | :--- | :--- | :--- |
-| **SmolLM2** | 135M | Q4_K_M | ~95 MB | Ultra-compact, instant execution on any device |
-| **SmolLM2** | 360M | Q4_K_M | ~240 MB | Fast structured parsing and reasoning |
+| **SmolLM2** | 135M | Q4_K_M | ~95 MB | Ultra-compact, instant execution on any phone |
+| **SmolLM2** | 360M | Q4_K_M | ~240 MB | Structured reasoning & fast generation |
 | **Qwen 2.5** | 0.5B | Q4_K_M | ~390 MB | Multilingual & basic code generation |
-| **Llama 3.2** | 1B | Q4_K_M | ~800 MB | Flagship lightweight general assistant |
+| **Llama 3.2** | 1B | Q4_K_M | ~800 MB | Meta's flagship lightweight general assistant |
 | **Qwen 2.5** | 1.5B | Q4_K_M | ~1.0 GB | High reasoning, logic, and multi-language |
-| **Llama 3.2** | 3B | Q4_K_M | ~2.0 GB | Flagship-grade reasoning on 6GB+ RAM phones |
-| **Qwen 2.5** | 3B | Q4_K_M | ~2.1 GB | Outstanding Python/JS coding and math logic |
+
+---
+
+### 🟡 Tier 2: For Phones with 6 GB RAM
+*The ideal sweet-spot for daily chat, long-form writing, and problem-solving without slowing down your phone.*
+
+| Model | Parameters | Quantization | RAM Footprint | Strengths |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Gemma 2** | 2B | Q4_K_M | ~1.6 GB | High-intelligence 2B model derived from Gemini |
+| **Llama 3.2** | 3B | Q4_K_M | ~2.0 GB | Recommended daily driver for chat & summaries |
+| **Qwen 2.5** | 3B | Q4_K_M | ~2.1 GB | Exceptional Python/JS code synthesis & math |
+
+---
+
+### 🔴 Tier 3: For Phones with 8 GB – 12 GB+ RAM
+*Heavy software engineering, advanced reasoning, and deep comprehension for flagship smartphones (e.g. Motorola Edge 40, Galaxy S series).*
+
+| Model | Parameters | Quantization | RAM Footprint | Strengths |
+| :--- | :--- | :--- | :--- | :--- |
+| **Qwen 2.5 Coder** | 3B | Q4_K_M | ~2.1 GB | Specialist dedicated to Python, JavaScript & algorithms |
+| **Microsoft Phi-3.5 mini** | 3.8B | Q4_K_M | ~2.3 GB | State-of-the-art math and multi-step reasoning |
+| **Qwen 2.5** | 7B | Q3_K_M | ~3.8 GB | Near-flagship intelligence (requires 8GB+ RAM) |
 
 ---
 

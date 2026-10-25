@@ -1346,13 +1346,22 @@
     let activeChatId = null;
 
     const PRESETS = [
-      { name: "SmolLM2 135M Instruct", size: "~95 MB", file: "SmolLM2-135M-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf", desc: "Ultra-compact, instant generation on edge devices" },
-      { name: "SmolLM2 360M Instruct", size: "~240 MB", file: "SmolLM2-360M-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf", desc: "High-efficiency structured reasoning" },
-      { name: "Qwen 2.5 0.5B Instruct", size: "~390 MB", file: "qwen2.5-0.5b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf", desc: "Multilingual & coding edge powerhouse" },
-      { name: "Llama 3.2 1B Instruct", size: "~800 MB", file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf", desc: "Meta's flagship lightweight general model" },
-      { name: "Qwen 2.5 1.5B Instruct", size: "~1.0 GB", file: "qwen2.5-1.5b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf", desc: "Complex reasoning, multilingual logic" },
-      { name: "Llama 3.2 3B Instruct", size: "~2.0 GB", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", desc: "Sweet-spot for 6GB+ RAM phones" },
-      { name: "Qwen 2.5 3B Instruct", size: "~2.1 GB", file: "qwen2.5-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf", desc: "Exceptional code synthesis & math" }
+      // 🟢 4GB RAM TIER
+      { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "SmolLM2 135M Instruct", size: "~95 MB", ramBadge: "4GB RAM", file: "SmolLM2-135M-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf", desc: "Instant generation on any edge device" },
+      { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "SmolLM2 360M Instruct", size: "~240 MB", ramBadge: "4GB RAM", file: "SmolLM2-360M-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf", desc: "High-efficiency structured reasoning" },
+      { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "Qwen 2.5 0.5B Instruct", size: "~390 MB", ramBadge: "4GB RAM", file: "qwen2.5-0.5b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf", desc: "Multilingual & coding edge powerhouse" },
+      { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "Llama 3.2 1B Instruct", size: "~800 MB", ramBadge: "4GB RAM", file: "Llama-3.2-1B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf", desc: "Meta's flagship lightweight general model" },
+      { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "Qwen 2.5 1.5B Instruct", size: "~1.0 GB", ramBadge: "4GB RAM", file: "qwen2.5-1.5b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf", desc: "Complex reasoning & multilingual logic" },
+
+      // 🟡 6GB RAM TIER
+      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Google Gemma 2 2B IT", size: "~1.6 GB", ramBadge: "6GB RAM", file: "gemma-2-2b-it-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf", desc: "Google's high-intelligence 2B Gemini-derived model" },
+      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Llama 3.2 3B Instruct", size: "~2.0 GB", ramBadge: "6GB RAM", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", desc: "Recommended sweet-spot for daily chat & writing" },
+      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Qwen 2.5 3B Instruct", size: "~2.1 GB", ramBadge: "6GB RAM", file: "qwen2.5-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf", desc: "Exceptional code synthesis & math logic" },
+
+      // 🔴 8GB+ RAM TIER
+      { tier: "🔴 FOR 8 GB+ RAM PHONES (Heavy Reasoning & Coding)", name: "Qwen 2.5 Coder 3B", size: "~2.1 GB", ramBadge: "8GB RAM", file: "qwen2.5-coder-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf", desc: "Dedicated Python/JS software engineering specialist" },
+      { tier: "🔴 FOR 8 GB+ RAM PHONES (Heavy Reasoning & Coding)", name: "Microsoft Phi-3.5 mini (3.8B)", size: "~2.3 GB", ramBadge: "8GB RAM", file: "Phi-3.5-mini-instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf", desc: "Microsoft's reasoning & logic champion" },
+      { tier: "🔴 FOR 8 GB+ RAM PHONES (Heavy Reasoning & Coding)", name: "Qwen 2.5 7B Instruct (Q3_K_M)", size: "~3.8 GB", ramBadge: "8GB+ RAM", file: "qwen2.5-7b-instruct-q3_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf", desc: "Flagship intelligence for 8GB–12GB+ RAM phones" }
     ];
 
     // =========================================================================
@@ -1874,12 +1883,21 @@
       const list = document.getElementById('presets-catalog-list');
       list.innerHTML = '';
 
+      let lastTier = '';
       PRESETS.forEach(p => {
+        if (p.tier !== lastTier) {
+          lastTier = p.tier;
+          const tierHeader = document.createElement('div');
+          tierHeader.style.cssText = 'font-family: "JetBrains Mono", monospace; font-size: 0.72rem; font-weight: 700; color: var(--crimson); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 8px; padding: 4px 2px; border-bottom: 1px dashed var(--border);';
+          tierHeader.innerText = p.tier;
+          list.appendChild(tierHeader);
+        }
+
         const item = document.createElement('div');
         item.className = 'model-card-row';
         item.innerHTML = `
           <div class="model-meta">
-            <h5>${p.name}</h5>
+            <h5>${p.name} <span class="status-tag download-tag" style="color: var(--crimson);">${p.ramBadge}</span></h5>
             <span>${p.desc} &bull; <b>${p.size}</b></span>
           </div>
           <div>
