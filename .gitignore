@@ -1,0 +1,26 @@
+# LLM Model Weights & Data (GGUF, bin, safetensors)
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# Python Cache & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+
+# llama.cpp build artifacts if cloned locally
+llama.cpp/
+build/
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
