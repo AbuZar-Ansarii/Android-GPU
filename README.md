@@ -9,43 +9,93 @@
 
 **Offload local LLM compute, neural execution, and RAM allocation directly to your Android smartphone over high-speed USB or Wi-Fi.**
 
-[⚡ 1-Command Setup](#-1-command-phone-setup) • [Features](#-key-features) • [Architecture](#-system-architecture) • [Model Catalog](#-recommended-models) • [API Guide](#-openai-api-integration)
+[⚡ 1-Command Setup](#-method-1-1-command-automatic-setup-recommended) • [🛠️ Manual Setup](#-method-2-manual-step-by-step-setup) • [Features](#-key-features) • [Architecture](#-system-architecture) • [Model Catalog](#-recommended-models) • [API Guide](#-openai-api-integration)
 
 </div>
 
 ---
 
-## ⚡ 1-Command Phone Setup
+## ⚡ Method 1: 1-Command Automatic Setup (Recommended)
 
-Open **Termux** on your phone, paste this single command, and press Enter:
+### 1. On Your Android Phone
+Open the **Termux** app on your phone, paste this single command, and press **Enter**:
 
 ```bash
 curl -sL https://raw.githubusercontent.com/AbuZar-Ansarii/Android-GPU/main/setup_termux.sh | bash
 ```
 
-> **What this one command does automatically:**
+> **What this one command handles automatically:**
 > 1. Clones the Android-GPU repository.
-> 2. Acquires CPU wake-lock (keeps the model alive in the background).
-> 3. Installs dependencies and compiles `llama.cpp` using all phone CPU cores.
-> 4. Gives you an interactive menu to choose & download a model (135M to 3B).
-> 5. Launches the Web UI & OpenAI-compatible server at `http://localhost:8080`.
+> 2. Acquires CPU wake-lock (keeps the model running in the background with screen off).
+> 3. Installs compilers and builds `llama.cpp` using all phone CPU cores.
+> 4. Displays an interactive terminal menu to choose and download a model (135M to 3B).
+> 5. Launches the Web UI and OpenAI API server at `http://localhost:8080`.
 
 *(Alternative without curl:* `pkg update -y && pkg install -y git && git clone https://github.com/AbuZar-Ansarii/Android-GPU.git ~/Android-GPU && cd ~/Android-GPU && bash setup_termux.sh`*)*
 
+### 2. Connect from Your PC
+Plug your phone into your PC via USB (with **USB Debugging** enabled) and run:
+* **On Windows:** Double-click **`start_pc_bridge.bat`** (forwards port 8080 and launches your browser automatically).
+* **On Linux / macOS:** Run `adb forward tcp:8080 tcp:8080` and visit **`http://localhost:8080`**.
+
 ---
 
-## 💻 1-Step PC Connection
+## 🛠️ Method 2: Manual Step-by-Step Setup
 
-Connect your phone to your PC via USB (with **USB Debugging** enabled in Developer Options) and run:
+If you prefer full control or want to transfer files manually over USB without cloning from the internet:
 
-* **On Windows:** Double-click **`start_pc_bridge.bat`** (it forwards the port and opens the browser automatically).
-* **On Linux / macOS:** Run:
-  ```bash
-  adb forward tcp:8080 tcp:8080
+### Step 1: Phone Preparation
+1. Enable **Developer Options** and turn on **USB Debugging**:
+   * Open **Settings** $\rightarrow$ **About Phone** $\rightarrow$ tap **Build Number** 7 times.
+   * Go to **Settings** $\rightarrow$ **System** $\rightarrow$ **Developer Options** $\rightarrow$ enable **USB Debugging**.
+2. Install **Termux**:
+   * Download the latest APK from [F-Droid](https://f-droid.org/en/packages/com.termux/) or GitHub Releases (do not use the Google Play Store version).
+
+---
+
+### Step 2: Transfer Project Files to Your Phone
+Connect your phone to your PC with a USB cable.
+
+#### On Windows:
+Double-click **`install_to_phone.bat`** in this folder. It will automatically push all project files (`setup_termux.sh`, `app.py`, and `web/`) to `/sdcard/Download/PhoneAsGPU/`.
+
+#### On Linux / macOS:
+```bash
+adb shell mkdir -p /sdcard/Download/PhoneAsGPU
+adb push setup_termux.sh /sdcard/Download/PhoneAsGPU/
+adb push app.py /sdcard/Download/PhoneAsGPU/
+adb push web /sdcard/Download/PhoneAsGPU/
+```
+
+---
+
+### Step 3: Run the Setup in Termux
+Open **Termux** on your phone and run:
+
+```bash
+termux-setup-storage
+cp -r ~/storage/downloads/PhoneAsGPU ~/
+cd ~/PhoneAsGPU && chmod +x setup_termux.sh && ./setup_termux.sh
+```
+
+1. It will install build tools (`clang`, `cmake`, `make`, `python`) and compile `llama.cpp`.
+2. It will prompt you with a numbered list to pick a model to download (e.g. `1` for SmolLM2 135M or `4` for Llama 3.2 1B).
+3. Once completed, the server starts running on port `8080`.
+
+---
+
+### Step 4: Access on PC & Phone
+
+* **On Your Phone:** Open Chrome or any browser on your phone and visit:
+  ```text
+  http://localhost:8080
   ```
-  Then open: **`http://localhost:8080`**
-
-*(Or connect wirelessly over the same Wi-Fi using `http://<PHONE_IP>:8080`)*
+* **On Your PC over USB (Zero Latency):**
+  * Run **`start_pc_bridge.bat`** (or `adb forward tcp:8080 tcp:8080`).
+  * Open in your PC browser: **`http://localhost:8080`**.
+* **On Your PC over Local Wi-Fi:**
+  * Connect your PC and phone to the same Wi-Fi network.
+  * Open in your PC browser: **`http://<PHONE_IP>:8080`** *(Phone IP is displayed in the Termux terminal output)*.
 
 ---
 
