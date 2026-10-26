@@ -58,29 +58,75 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
+def get_binary_env(binary_path=None):
+    """
+    Construct environment with LD_LIBRARY_PATH pointing to any shared libraries
+    required by llama-server (e.g., libllama.so, libggml-*.so, OpenCL/Vulkan drivers).
+    """
+    env = os.environ.copy()
+    ld_paths = []
+    if binary_path:
+        bin_dir = os.path.dirname(os.path.abspath(binary_path))
+        ld_paths.extend([
+            bin_dir,
+            os.path.join(bin_dir, "..", "lib"),
+            os.path.join(bin_dir, "lib")
+        ])
+    
+    default_dirs = [
+        os.path.join(HOME_DIR, "llama.cpp", "build", "bin"),
+        os.path.join(HOME_DIR, "llama.cpp", "lib"),
+        os.path.join(HOME_DIR, "llama.cpp", "bin"),
+        os.path.join(HOME_DIR, "llama.cpp"),
+        "/data/data/com.termux/files/usr/lib"
+    ]
+    for d in default_dirs:
+        if os.path.isdir(d) and d not in ld_paths:
+            ld_paths.append(d)
+            
+    cur_ld = env.get("LD_LIBRARY_PATH", "")
+    if cur_ld:
+        ld_paths.append(cur_ld)
+    
+    env["LD_LIBRARY_PATH"] = ":".join([d for d in ld_paths if d and os.path.isdir(d)])
+    return env
+
+# Setup process-wide LD_LIBRARY_PATH at startup
+_env_ld = get_binary_env().get("LD_LIBRARY_PATH")
+if _env_ld:
+    os.environ["LD_LIBRARY_PATH"] = _env_ld
+
 def find_llama_server_binary():
-    """Locate the compiled llama-server executable."""
+    """Locate the compiled or pre-installed llama-server executable."""
     candidates = [
         os.path.join(HOME_DIR, "llama.cpp", "build", "bin", "llama-server"),
+        os.path.join(HOME_DIR, "llama.cpp", "bin", "llama-server"),
+        os.path.join(HOME_DIR, "llama.cpp", "llama-server"),
         os.path.join(HOME_DIR, "llama.cpp", "build", "bin", "server"),
         shutil.which("llama-server"),
         shutil.which("server"),
         "/data/data/com.termux/files/usr/bin/llama-server",
-        "/data/data/com.termux/files/usr/bin/server"
+        "/data/data/com.termux/files/usr/bin/server",
+        os.path.join(HOME_DIR, "bin", "llama-server"),
+        os.path.join(HOME_DIR, "llama-server")
     ]
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     
-    # Dynamic search in ~/llama.cpp/build for any valid binary
-    build_dir = os.path.join(HOME_DIR, "llama.cpp", "build")
-    if os.path.isdir(build_dir):
-        for root, _, files in os.walk(build_dir):
-            for f in files:
-                if f in ("llama-server", "server"):
-                    fp = os.path.join(root, f)
-                    if os.access(fp, os.X_OK):
-                        return fp
+    # Dynamic search across ~/llama.cpp and system directories
+    search_dirs = [
+        os.path.join(HOME_DIR, "llama.cpp"),
+        "/data/data/com.termux/files/usr/bin"
+    ]
+    for sdir in search_dirs:
+        if os.path.isdir(sdir):
+            for root, _, files in os.walk(sdir):
+                for f in files:
+                    if f in ("llama-server", "server"):
+                        fp = os.path.join(root, f)
+                        if os.access(fp, os.X_OK):
+                            return fp
     return None
 
 def get_binary_features(binary_path):
@@ -100,7 +146,8 @@ def get_binary_features(binary_path):
         "vulkan": False
     }
     try:
-        res = subprocess.run([binary_path, "--help"], capture_output=True, text=True, timeout=5)
+        env = get_binary_env(binary_path)
+        res = subprocess.run([binary_path, "--help"], capture_output=True, text=True, timeout=5, env=env)
         help_text = res.stdout + res.stderr
         if "--flash-attn" in help_text or "-fa" in help_text:
             features["flash_attn"] = True
@@ -108,7 +155,7 @@ def get_binary_features(binary_path):
             features["kv_quant"] = True
         if "--n-gpu-layers" in help_text or "-ngl" in help_text:
             features["gpu_layers"] = True
-        if "vulkan" in help_text.lower() or "ggml_vulkan" in help_text.lower():
+        if "vulkan" in help_text.lower() or "ggml_vulkan" in help_text.lower() or "opencl" in help_text.lower():
             features["vulkan"] = True
     except Exception:
         pass
@@ -297,15 +344,31 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print(f"[*] CPU Pinning : {cpu_topo.get('affinity_str') if use_pinning else 'None'}")
     print("=" * 60)
 
+    server_log_path = os.path.join(HOME_DIR, "llama_server.log")
+    try:
+        log_file = open(server_log_path, "a")
+        log_file.write(f"\n--- Launching llama-server at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        log_file.write(f"Command: {' '.join(cmd)}\n")
+        log_file.flush()
+    except Exception:
+        log_file = subprocess.DEVNULL
+
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=log_file,
+        env=get_binary_env(binary_path),
         preexec_fn=os.setsid if hasattr(os, "setsid") else None
     )
 
     # Wait for server to come online
-    time.sleep(2.5)
+    time.sleep(2.0)
+
+    if proc.poll() is not None:
+        print(f"[ERROR] llama-server exited unexpectedly with return code {proc.returncode}!")
+        print(f"[*] Inspect runtime logs at: {server_log_path}")
+    else:
+        print(f"[✓] Model successfully loaded with acceleration: {os.path.basename(model_path)}")
 
     with state_lock:
         llama_process = proc
@@ -319,8 +382,6 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             "gpu_layers": gpu_layers if features.get("gpu_layers") else 0,
             "pinned_cores": cpu_topo.get("affinity_str") if use_pinning else None
         }
-
-    print(f"[✓] Model successfully loaded with acceleration: {current_model_name}")
 
 def scan_models(include_downloads=True):
     """Scan ~/models and Android download directories for GGUF files."""
