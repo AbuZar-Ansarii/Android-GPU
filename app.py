@@ -299,7 +299,7 @@ def _poll_server_health(proc, timeout_sec=15):
         time.sleep(0.5)
     return False
 
-def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="q8_0", gpu_layers=0, pin_cores=True):
+def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="f16", gpu_layers=0, pin_cores=True):
     """
     Start llama-server with hardware acceleration flags:
     - Big-core CPU affinity (prevents slow efficiency core stalls)
@@ -663,7 +663,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     threads = int(threads)
                 ctx_size = int(payload.get("ctx_size", 2048))
                 flash_attn = bool(payload.get("flash_attn", True))
-                kv_quant = str(payload.get("kv_quant", "q8_0"))
+                kv_quant = str(payload.get("kv_quant", "f16"))
                 gpu_layers = int(payload.get("gpu_layers", 0))
                 pin_cores = bool(payload.get("pin_cores", True))
 
@@ -740,13 +740,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.send_header("Access-Control-Allow-Headers", "*")
                     self.end_headers()
 
-                    # Stream with low latency
-                    while True:
-                        chunk = resp.read(512)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
+                    # Stream line-by-line for SSE to preserve chunk integrity
+                    if is_sse:
+                        while True:
+                            line = resp.readline()
+                            if not line:
+                                break
+                            self.wfile.write(line)
+                            self.wfile.flush()
+                    else:
+                        while True:
+                            chunk = resp.read(4096)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
             except Exception as e:
                 self.send_json(502, {"error": f"Llama-server communication failed: {str(e)}"})
             return

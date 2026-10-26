@@ -1414,8 +1414,8 @@
             <div class="accel-control-row">
               <span class="accel-control-label">KV Cache Quant:</span>
               <select id="accel-kv" class="accel-input-sm">
-                <option value="q8_0" selected>q8_0 (50% Bandwidth)</option>
-                <option value="f16">f16 (Standard)</option>
+                <option value="f16" selected>f16 (Standard / High Fidelity)</option>
+                <option value="q8_0">q8_0 (Memory Efficient)</option>
               </select>
             </div>
             <div class="accel-control-row">
@@ -1780,7 +1780,7 @@
 
       if (profile === 'turbo') {
         if (faCheck) faCheck.checked = true;
-        if (kvSelect) kvSelect.value = 'q8_0';
+        if (kvSelect) kvSelect.value = 'f16';
         if (pinCheck) pinCheck.checked = true;
         if (gpuSelect) gpuSelect.value = '99';
         if (window._recommendedThreads && threadsInput) threadsInput.value = window._recommendedThreads;
@@ -1792,7 +1792,7 @@
         if (window._recommendedThreads && threadsInput) threadsInput.value = window._recommendedThreads;
       } else if (profile === 'powersave') {
         if (faCheck) faCheck.checked = true;
-        if (kvSelect) kvSelect.value = 'q8_0';
+        if (kvSelect) kvSelect.value = 'f16';
         if (pinCheck) pinCheck.checked = false;
         if (gpuSelect) gpuSelect.value = '0';
         if (threadsInput) threadsInput.value = Math.max(1, (window._recommendedThreads || 4) - 1);
@@ -1954,18 +1954,21 @@
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
         let fullResponse = '';
+        let sseBuffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          // Preserve uncompleted trailing fragment in buffer for the next chunk
+          sseBuffer = lines.pop() ?? '';
 
           for (const line of lines) {
             const trimmed = line.trim();
-            if (trimmed.startsWith('data: ')) {
-              const dataStr = trimmed.replace('data: ', '');
+            if (trimmed.startsWith('data:')) {
+              const dataStr = trimmed.slice(5).trim();
               if (dataStr === '[DONE]') continue;
               try {
                 const parsed = JSON.parse(dataStr);
@@ -1981,6 +1984,21 @@
                 }
               } catch (e) {}
             }
+          }
+        }
+
+        // Flush any trailing line in sseBuffer
+        if (sseBuffer.trim().startsWith('data:')) {
+          const dataStr = sseBuffer.trim().slice(5).trim();
+          if (dataStr !== '[DONE]') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              const delta = parsed.choices?.[0]?.delta?.content || '';
+              if (delta) {
+                tokenCount++;
+                fullResponse += delta;
+              }
+            } catch (e) {}
           }
         }
 
@@ -2164,7 +2182,7 @@
       const threadsVal = parseInt(document.getElementById('accel-threads')?.value);
       const ctxVal = parseInt(document.getElementById('accel-ctx')?.value) || 2048;
       const flashAttnVal = document.getElementById('accel-fa')?.checked ?? true;
-      const kvQuantVal = document.getElementById('accel-kv')?.value || 'q8_0';
+      const kvQuantVal = document.getElementById('accel-kv')?.value || 'f16';
       const gpuLayersVal = parseInt(document.getElementById('accel-gpu-layers')?.value) || 0;
       const pinCoresVal = document.getElementById('accel-pin-cores')?.checked ?? true;
 
