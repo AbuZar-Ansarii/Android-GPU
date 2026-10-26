@@ -112,6 +112,13 @@ Modern Android smartphones pack **8-core ARM CPUs, high-speed unified LPDDR4X/LP
 ## 🚀 Key Features
 
 * **📱 Pure On-Device Execution:** 100% offline, zero cloud subscriptions, zero telemetry.
+* **⚡ Hardware Acceleration Engine:**
+  * **Vulkan Mobile GPU Offloading:** Offload model layers directly to Snapdragon Adreno or MediaTek Mali mobile GPUs for 2x–3x faster generation.
+  * **ARMv8.2-A Dot Product Vector Math:** Leverages hardware `sdot` / `udot` instructions for ultra-fast 4-bit integer matrix multiplication.
+  * **Big.LITTLE Core Pinning (`taskset`):** Prevents slow efficiency-core stalls by locking compute threads exclusively to the high-performance CPU cores.
+  * **Flash Attention & 8-bit KV Cache:** Reduces memory bandwidth consumption by 50% for high-speed, long-context generation.
+  * **Live Performance Metrics:** Real-time tokens/second ($t/s$), elapsed generation time, and Time-To-First-Token (TTFT) benchmarking badges on every assistant response.
+  * **On-Device Hardware Telemetry:** Real-time phone battery % and thermal temperature monitoring to keep your device running cool.
 * **⚡ High-Speed USB Tunneling (ADB):** Connect via USB cable for zero-latency token streaming without depending on local network speeds.
 * **🌐 Wireless Local Wi-Fi:** Roam freely and access the model on any browser across your local network.
 * **🎨 Industrial Matte & Crimson UI:**
@@ -122,7 +129,7 @@ Modern Android smartphones pack **8-core ARM CPUs, high-speed unified LPDDR4X/LP
 * **🧠 Dynamic Model & Buffer Manager:**
   * **Free RAM & Unload:** Instantly kill the inference backend to free 100% of phone RAM for normal phone use.
   * **Phone Storage Scanner:** Scans `/sdcard/Download` with 1 click to mount any `.gguf` model downloaded through Chrome or mobile browsers.
-  * **Built-in Presets Downloader:** Fetch verified compact models (135M to 3B) straight from Hugging Face with live progress meter.
+  * **Built-in Presets Downloader:** Fetch verified compact models (135M to 3B, with Q4_0 and Q4_K_M quants) straight from Hugging Face with live progress meter.
 * **🔌 Universal OpenAI API Compatibility:** Direct drop-in endpoint at `http://localhost:8080/v1` for VS Code extensions (Continue, Roo Code, Cline), Python scripts, LangChain, or Open WebUI.
 
 ---
@@ -183,13 +190,15 @@ Android-GPU/
 Choose a model matched to your phone's total RAM capacity. Using 4-bit (`Q4_K_M`) quantization leaves plenty of headroom for Android OS background services:
 
 ### 🟢 Tier 1: For Phones with 3 GB – 4 GB RAM
-*Best for ultra-fast token generation, basic assistant tasks, and minimal memory usage.*
+*Best for ultra-fast token generation, basic assistant tasks, and minimal memory usage. Note: `Q4_0` quantizations leverage ARM Dot-Product vector instructions directly with zero unpacking overhead for maximum tokens/second.*
 
 | Model | Parameters | Quantization | RAM Footprint | Strengths |
 | :--- | :--- | :--- | :--- | :--- |
+| **SmolLM2** | 135M | Q4_0 | ~80 MB | **[Fastest]** Direct ARM NEON DotProd execution |
 | **SmolLM2** | 135M | Q4_K_M | ~95 MB | Ultra-compact, instant execution on any phone |
 | **SmolLM2** | 360M | Q4_K_M | ~240 MB | Structured reasoning & fast generation |
 | **Qwen 2.5** | 0.5B | Q4_K_M | ~390 MB | Multilingual & basic code generation |
+| **Llama 3.2** | 1B | Q4_0 | ~700 MB | **[Fastest 1B]** Meta lightweight model with fastest SIMD math |
 | **Llama 3.2** | 1B | Q4_K_M | ~800 MB | Meta's flagship lightweight general assistant |
 | **Qwen 2.5** | 1.5B | Q4_K_M | ~1.0 GB | High reasoning, logic, and multi-language |
 
