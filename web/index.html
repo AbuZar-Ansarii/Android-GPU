@@ -783,6 +783,167 @@
     }
 
     /* ==========================================================================
+       THINKING STATE & DYNAMIC SYNONYMS
+       ========================================================================== */
+    .thinking-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+      animation: thinkingGlow 2.5s infinite alternate ease-in-out;
+      user-select: none;
+    }
+
+    .thinking-box::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(230, 57, 70, 0.12), transparent);
+      animation: shimmerSweep 2.2s infinite;
+      pointer-events: none;
+    }
+
+    @keyframes shimmerSweep {
+      0% { left: -100%; }
+      100% { left: 150%; }
+    }
+
+    @keyframes thinkingGlow {
+      0% {
+        border-color: var(--border);
+        box-shadow: 0 0 0 rgba(230, 57, 70, 0);
+      }
+      100% {
+        border-color: rgba(230, 57, 70, 0.45);
+        box-shadow: 0 0 16px -2px var(--crimson-glow);
+      }
+    }
+
+    .thinking-icon-wrap {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: var(--crimson-bg);
+      border: 1px solid rgba(230, 57, 70, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--crimson);
+      flex-shrink: 0;
+      animation: brainPulse 1.8s infinite ease-in-out;
+    }
+
+    @keyframes brainPulse {
+      0%, 100% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 0px var(--crimson));
+      }
+      50% {
+        transform: scale(1.08);
+        filter: drop-shadow(0 0 8px var(--crimson));
+      }
+    }
+
+    .thinking-text-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 170px;
+    }
+
+    .thinking-phrase {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-main);
+      display: inline-block;
+      transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      letter-spacing: -0.01em;
+    }
+
+    .thinking-phrase.fading {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+
+    .thinking-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .thinking-timer {
+      font-variant-numeric: tabular-nums;
+      color: var(--crimson);
+      font-weight: 600;
+    }
+
+    .thinking-dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .thinking-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--crimson);
+      animation: dotBounce 1.4s infinite ease-in-out both;
+    }
+
+    .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+    .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes dotBounce {
+      0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    .gen-metrics-badge {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 6px 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.73rem;
+      color: var(--text-muted);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    }
+
+    .gen-metrics-badge .metric-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .gen-metrics-badge .metric-val {
+      color: var(--crimson);
+      font-weight: 700;
+    }
+
+    .gen-metrics-badge .metric-dot {
+      color: var(--border);
+    }
+
+    /* ==========================================================================
        BOTTOM INPUT PROMPT BAR
        ========================================================================== */
     .input-wrapper-outer {
@@ -1224,7 +1385,12 @@
     <div class="sidebar-header">
       <div class="sidebar-brand">
         <div class="brand-logo-wrap">
-          <div class="brand-icon">⚡</div>
+          <div class="brand-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path>
+              <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path>
+            </svg>
+          </div>
           <div class="brand-title">Phone<span>AsGPU</span></div>
         </div>
         <button class="sidebar-close-btn" onclick="toggleSidebar(false)">&times;</button>
@@ -1295,7 +1461,15 @@
           <span>💻</span> PC BRIDGE
         </button>
         <button class="btn btn-primary" onclick="openModelModal()">
-          <span>⚡</span> MODELS
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;">
+            <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+            <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+            <line x1="1" y1="9" x2="4" y2="9"></line>
+            <line x1="1" y1="15" x2="4" y2="15"></line>
+            <line x1="20" y1="9" x2="23" y2="9"></line>
+            <line x1="20" y1="15" x2="23" y2="15"></line>
+          </svg>
+          MODELS
         </button>
       </div>
     </header>
@@ -1305,7 +1479,13 @@
       
       <!-- Hero View (When current chat is empty) -->
       <div class="hero-container" id="hero-view">
-        <div class="hero-badge">⚡ PHONE AS GPU // LOCAL ENGINE</div>
+        <div class="hero-badge">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px; vertical-align: middle;">
+            <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path>
+            <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path>
+          </svg>
+          ON-DEVICE NEURAL ACCELERATION // EDGE ENGINE
+        </div>
         <h1 class="hero-title">Phone as <span>Local GPU</span></h1>
         <p class="hero-subtitle">
           Ultra-compact on-device neural acceleration. Zero cloud latency, executing models directly on your smartphone's unified hardware.
@@ -1370,7 +1550,7 @@
 
         <!-- Telemetry Status Ribbon -->
         <div class="telemetry-strip" id="telemetry-strip">
-          <div class="telemetry-pill"><span>⚡ CPU:</span> <span class="val" id="telem-cpu">Detecting...</span></div>
+          <div class="telemetry-pill"><span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right: 2px; vertical-align: middle;"><rect x="4" y="4" width="16" height="16" rx="2"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line></svg>CPU:</span> <span class="val" id="telem-cpu">Detecting...</span></div>
           <div class="telemetry-pill"><span>🔋 Battery:</span> <span class="val" id="telem-battery">--</span></div>
           <div class="telemetry-pill"><span>🌡️ Temp:</span> <span class="val" id="telem-temp">--</span></div>
           <div class="telemetry-pill"><span>🎮 Engine:</span> <span class="val" id="telem-engine" style="color: var(--crimson);">ARM NEON</span></div>
@@ -1379,7 +1559,7 @@
         <!-- Hardware Acceleration & Performance Engine Box -->
         <div class="accel-card">
           <div class="accel-title-row">
-            <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 700; color: var(--text-dim); letter-spacing: 0.05em;">⚡ ACCELERATION PROFILE</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 700; color: var(--text-dim); letter-spacing: 0.05em;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="margin-right: 3px; vertical-align: middle;"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path></svg>HARDWARE ACCELERATION ENGINE</span>
             <button type="button" class="btn btn-secondary" onclick="toggleAccelDrawer()" id="accel-drawer-btn" style="padding: 2px 7px; font-size: 0.68rem;">
               ⚙️ TUNING
             </button>
@@ -1544,6 +1724,40 @@
     let chats = [];
     let activeChatId = null;
 
+    const ICONS = {
+      brain: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path>
+        <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path>
+      </svg>`,
+      gpu: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+        <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+        <line x1="1" y1="9" x2="4" y2="9"></line>
+        <line x1="1" y1="15" x2="4" y2="15"></line>
+        <line x1="20" y1="9" x2="23" y2="9"></line>
+        <line x1="20" y1="15" x2="23" y2="15"></line>
+        <line x1="9" y1="1" x2="9" y2="4"></line>
+        <line x1="15" y1="1" x2="15" y2="4"></line>
+        <line x1="9" y1="20" x2="9" y2="23"></line>
+        <line x1="15" y1="20" x2="15" y2="23"></line>
+      </svg>`,
+      chip: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+        <line x1="1" y1="9" x2="4" y2="9"></line>
+        <line x1="1" y1="15" x2="4" y2="15"></line>
+        <line x1="20" y1="9" x2="23" y2="9"></line>
+        <line x1="20" y1="15" x2="23" y2="15"></line>
+        <line x1="9" y1="1" x2="9" y2="4"></line>
+        <line x1="15" y1="1" x2="15" y2="4"></line>
+        <line x1="9" y1="20" x2="9" y2="23"></line>
+        <line x1="15" y1="20" x2="15" y2="23"></line>
+      </svg>`,
+      user: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>`
+    };
+
     const PRESETS = [
       // 🟢 4GB RAM TIER
       { tier: "🟢 FOR 4 GB RAM PHONES (Ultra-Fast & Compact)", name: "SmolLM2 135M Instruct (Q4_0)", size: "~80 MB", ramBadge: "4GB RAM", file: "SmolLM2-135M-Instruct-Q4_0.gguf", url: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf", desc: "[TURBO SPEED] Direct ARM NEON DotProd execution" },
@@ -1698,7 +1912,13 @@
         // Show Hero View
         container.innerHTML = `
           <div class="hero-container" id="hero-view">
-            <div class="hero-badge">⚡ PHONE AS GPU // LOCAL ENGINE</div>
+            <div class="hero-badge">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px; vertical-align: middle;">
+                <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path>
+                <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path>
+              </svg>
+              ON-DEVICE NEURAL ACCELERATION // EDGE ENGINE
+            </div>
             <h1 class="hero-title">Phone as <span>Local GPU</span></h1>
             <p class="hero-subtitle">
               Ultra-compact on-device neural acceleration. Zero cloud latency, executing models directly on your smartphone's unified hardware.
@@ -1717,7 +1937,7 @@
                 <p>Practical offline automation architectures</p>
               </div>
               <div class="suggestion-card" onclick="sendPrompt('Draft a concise, technical explanation of llama.cpp RPC layer offloading.')">
-                <h5>⚡ RPC Layer Offloading</h5>
+                <h5>🧠 RPC Tensor Offloading</h5>
                 <p>How RPC splits tensor graphs across USB</p>
               </div>
             </div>
@@ -1733,7 +1953,7 @@
           if (contentEl) {
             const badge = document.createElement('div');
             badge.className = 'gen-metrics-badge';
-            badge.innerHTML = `⚡ <span class="speed">${msg.metrics.speed} t/s</span> &bull; ${msg.metrics.tokens} tokens in ${msg.metrics.duration}s${msg.metrics.ttft ? ` &bull; TTFT ${msg.metrics.ttft}s` : ''}`;
+            badge.innerHTML = `<span class="metric-item">⚡ <span class="metric-val">${msg.metrics.speed}</span> t/s</span><span class="metric-dot">&bull;</span><span class="metric-item">📊 <span class="metric-val">${msg.metrics.tokens}</span> tokens in ${msg.metrics.duration}s${msg.metrics.ttft ? ` &bull; Thought <span class="metric-val">${msg.metrics.ttft}s</span>` : ''}</span>`;
             contentEl.appendChild(badge);
           }
         }
@@ -1924,7 +2144,71 @@
       // Prepare Assistant Stream Bubble
       const assistantRow = appendMessageElement('assistant', '', true);
       const contentEl = assistantRow.querySelector('.msg-body');
-      contentEl.innerHTML = '<span class="streaming-cursor"></span>';
+
+      const THINKING_PHRASES = [
+        "Thinking...",
+        "Reasoning through prompt...",
+        "Synthesizing knowledge...",
+        "Analyzing context...",
+        "Formulating thoughts...",
+        "Evaluating parameters...",
+        "Connecting concepts...",
+        "Assembling response...",
+        "Processing neural layers..."
+      ];
+
+      let phraseIdx = 0;
+      const thinkingStart = performance.now();
+
+      function updateThinkingBox() {
+        const elapsed = ((performance.now() - thinkingStart) / 1000).toFixed(1);
+        contentEl.innerHTML = `
+          <div class="thinking-box">
+            <div class="thinking-icon-wrap">
+              ${ICONS.brain}
+            </div>
+            <div class="thinking-text-wrap">
+              <span class="thinking-phrase" id="thinking-phrase-text">${THINKING_PHRASES[phraseIdx]}</span>
+              <div class="thinking-meta">
+                <span class="thinking-timer">${elapsed}s</span>
+                <span class="thinking-dots">
+                  <span class="thinking-dot"></span>
+                  <span class="thinking-dot"></span>
+                  <span class="thinking-dot"></span>
+                </span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      updateThinkingBox();
+
+      const timerInterval = setInterval(() => {
+        const timerEl = contentEl.querySelector('.thinking-timer');
+        if (timerEl) {
+          timerEl.innerText = `${((performance.now() - thinkingStart) / 1000).toFixed(1)}s`;
+        }
+      }, 100);
+
+      const phraseInterval = setInterval(() => {
+        phraseIdx = (phraseIdx + 1) % THINKING_PHRASES.length;
+        const phraseEl = contentEl.querySelector('#thinking-phrase-text');
+        if (phraseEl) {
+          phraseEl.classList.add('fading');
+          setTimeout(() => {
+            if (phraseEl) {
+              phraseEl.innerText = THINKING_PHRASES[phraseIdx];
+              phraseEl.classList.remove('fading');
+            }
+          }, 200);
+        }
+      }, 1300);
+
+      function stopThinking() {
+        clearInterval(timerInterval);
+        clearInterval(phraseInterval);
+      }
 
       isGenerating = true;
       toggleSendButtonState(true);
@@ -1975,11 +2259,15 @@
                 const delta = parsed.choices?.[0]?.delta?.content || '';
                 if (delta) {
                   tokenCount++;
-                  if (!firstTokenTime) firstTokenTime = performance.now();
+                  if (!firstTokenTime) {
+                    firstTokenTime = performance.now();
+                    stopThinking();
+                    contentEl.innerHTML = '';
+                  }
                   fullResponse += delta;
                   const elapsedGenSec = Math.max(0.05, (performance.now() - firstTokenTime) / 1000);
                   const curSpeed = (tokenCount / elapsedGenSec).toFixed(1);
-                  contentEl.innerHTML = marked.parse(fullResponse) + `<span class="streaming-cursor"></span><div class="streaming-live-speed">⚡ ${curSpeed} t/s</div>`;
+                  contentEl.innerHTML = marked.parse(fullResponse) + `<span class="streaming-cursor"></span><div class="streaming-live-speed"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 3px; vertical-align: middle;"><rect x="4" y="4" width="16" height="16" rx="2"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line></svg> ${curSpeed} t/s</div>`;
                   scrollChatToBottom();
                 }
               } catch (e) {}
@@ -2011,7 +2299,13 @@
         if (tokenCount > 0) {
           const metricsBadge = document.createElement('div');
           metricsBadge.className = 'gen-metrics-badge';
-          metricsBadge.innerHTML = `⚡ <span class="speed">${avgSpeed} tokens/sec</span> &bull; ${tokenCount} tokens in ${totalDuration}s &bull; TTFT ${ttft}s`;
+          metricsBadge.innerHTML = `
+            <span class="metric-item">⚡ <span class="metric-val">${avgSpeed}</span> t/s</span>
+            <span class="metric-dot">&bull;</span>
+            <span class="metric-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 3px; vertical-align: middle;"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04"></path></svg> Thought <span class="metric-val">${ttft}s</span></span>
+            <span class="metric-dot">&bull;</span>
+            <span class="metric-item">📊 <span class="metric-val">${tokenCount}</span> tokens (${totalDuration}s)</span>
+          `;
           contentEl.appendChild(metricsBadge);
         }
 
@@ -2021,12 +2315,14 @@
         attachCodeCopyButtons(contentEl);
 
       } catch (err) {
+        stopThinking();
         if (err.name === 'AbortError') {
           contentEl.innerHTML += '<p style="color: var(--text-dim); font-size: 0.78rem; margin-top: 6px; font-family: monospace;">[EXECUTION HALTED]</p>';
         } else {
           contentEl.innerHTML = `<p style="color: var(--crimson); font-size: 0.85rem;">Error: ${err.message}. Is a model loaded in RAM?</p>`;
         }
       } finally {
+        stopThinking();
         isGenerating = false;
         toggleSendButtonState(false);
         scrollChatToBottom();
@@ -2045,7 +2341,7 @@
 
       const avatar = document.createElement('div');
       avatar.className = `msg-avatar ${role}`;
-      avatar.innerText = role === 'user' ? 'USR' : '⚡';
+      avatar.innerHTML = role === 'user' ? ICONS.user : ICONS.brain;
 
       const body = document.createElement('div');
       body.className = 'msg-body';
