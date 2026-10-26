@@ -64,11 +64,23 @@ def find_llama_server_binary():
         os.path.join(HOME_DIR, "llama.cpp", "build", "bin", "llama-server"),
         os.path.join(HOME_DIR, "llama.cpp", "build", "bin", "server"),
         shutil.which("llama-server"),
-        shutil.which("server")
+        shutil.which("server"),
+        "/data/data/com.termux/files/usr/bin/llama-server",
+        "/data/data/com.termux/files/usr/bin/server"
     ]
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
+    
+    # Dynamic search in ~/llama.cpp/build for any valid binary
+    build_dir = os.path.join(HOME_DIR, "llama.cpp", "build")
+    if os.path.isdir(build_dir):
+        for root, _, files in os.walk(build_dir):
+            for f in files:
+                if f in ("llama-server", "server"):
+                    fp = os.path.join(root, f)
+                    if os.access(fp, os.X_OK):
+                        return fp
     return None
 
 def get_binary_features(binary_path):

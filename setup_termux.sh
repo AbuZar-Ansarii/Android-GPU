@@ -130,17 +130,20 @@ fi
 if [ "$SKIP_BUILD" -ne 1 ]; then
     echo -e "${YELLOW}[1/4] Installing build tools and packages...${NC}"
     pkg update -y 2>/dev/null || true
-    pkg install -y git cmake clang make termux-tools python iproute2 curl
+    pkg install -y tur-repo 2>/dev/null || true
+    pkg install -y git cmake clang ninja make termux-tools python iproute2 curl 2>/dev/null || pkg install -y git cmake clang make termux-tools python iproute2 curl
     pkg install -y libomp 2>/dev/null || true
     if [ "$HAS_VULKAN" -eq 1 ]; then
-        pkg install -y vulkan-headers vulkan-loader-android 2>/dev/null || true
+        echo -e "${BLUE}[*] Installing Vulkan GPU libraries and shader compiler (glslang)...${NC}"
+        pkg install -y vulkan-headers vulkan-loader vulkan-tools glslang 2>/dev/null || true
+        pkg install -y vulkan-loader-android 2>/dev/null || true
     fi
 
     echo -e "\n${YELLOW}[2/4] Fetching llama.cpp source code...${NC}"
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         echo -e "${BLUE}[*] Cloning fresh llama.cpp repository (shallow clone)...${NC}"
         rm -rf "$INSTALL_DIR"
-        git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
+        git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$INSTALL_DIR" || git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
     else
         echo -e "${BLUE}[*] Updating existing llama.cpp repository...${NC}"
         cd "$INSTALL_DIR"
@@ -172,15 +175,25 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
     rm -rf "$BUILD_DIR"
     mkdir -p "$BUILD_DIR"
 
+    CMAKE_GEN=""
+    if command -v ninja >/dev/null 2>&1; then
+        CMAKE_GEN="-G Ninja"
+    fi
+
     BUILD_SUCCESS=0
 
     # Tier 1: Vulkan Mobile GPU Build
     if [ "$ACCEL_CHOICE" -eq 1 ] && [ "$HAS_VULKAN" -eq 1 ]; then
         echo -e "${BLUE}[*] Configuring with Vulkan GPU acceleration...${NC}"
-        if cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release 2>&1; then
+        if cmake -B build $CMAKE_GEN -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF; then
             echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU support (${BUILD_CORES} parallel jobs)...${NC}"
-            if cmake --build build --target llama-server -j"$BUILD_CORES"; then
-                if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
+            if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
+                FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+                if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+                    mkdir -p "$BUILD_DIR/bin"
+                    cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
+                    chmod +x "$BUILD_DIR/bin/llama-server"
+                    SERVER_BIN="$BUILD_DIR/bin/llama-server"
                     echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
                     BUILD_SUCCESS=1
                 fi
@@ -196,10 +209,15 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
     # Tier 2: Optimized ARM CPU Build
     if [ "$BUILD_SUCCESS" -ne 1 ]; then
         echo -e "${BLUE}[*] Configuring Optimized ARM CPU build...${NC}"
-        if cmake -B build -DCMAKE_BUILD_TYPE=Release 2>&1; then
+        if cmake -B build $CMAKE_GEN -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF; then
             echo -e "${BLUE}[*] Compiling llama-server for ARM CPU (${BUILD_CORES} parallel jobs)...${NC}"
-            if cmake --build build --target llama-server -j"$BUILD_CORES"; then
-                if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
+            if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
+                FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+                if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+                    mkdir -p "$BUILD_DIR/bin"
+                    cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
+                    chmod +x "$BUILD_DIR/bin/llama-server"
+                    SERVER_BIN="$BUILD_DIR/bin/llama-server"
                     echo -e "${GREEN}[✓] Compiled successfully for ARM CPU!${NC}"
                     BUILD_SUCCESS=1
                 fi
@@ -209,26 +227,27 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
 
     # Tier 3: Pre-compiled Package Fallback (Guaranteed to work on any phone)
     if [ "$BUILD_SUCCESS" -ne 1 ]; then
-        echo -e "${YELLOW}[*] Source compilation was incomplete. Installing pre-compiled official package...${NC}"
-        pkg install -y llama.cpp 2>/dev/null || true
-        if command -v llama-server >/dev/null 2>&1; then
-            SERVER_BIN=$(command -v llama-server)
+        echo -e "${YELLOW}[*] Source compilation incomplete. Trying official pre-compiled package...${NC}"
+        pkg install -y tur-repo 2>/dev/null || true
+        pkg install -y llama-cpp 2>/dev/null || pkg install -y llama.cpp 2>/dev/null || true
+        FOUND_SYS_BIN=$(command -v llama-server || which llama-server 2>/dev/null || echo "")
+        if [ -n "$FOUND_SYS_BIN" ] && [ -x "$FOUND_SYS_BIN" ]; then
+            SERVER_BIN="$FOUND_SYS_BIN"
             echo -e "${GREEN}[✓] Installed pre-compiled llama-server successfully!${NC}"
             BUILD_SUCCESS=1
         fi
     fi
 
-    if [ -f "$BUILD_DIR/bin/llama-server" ]; then
-        SERVER_BIN="$BUILD_DIR/bin/llama-server"
-    elif [ -f "$BUILD_DIR/bin/server" ]; then
-        SERVER_BIN="$BUILD_DIR/bin/server"
-    elif command -v llama-server >/dev/null 2>&1; then
-        SERVER_BIN=$(command -v llama-server)
-    fi
-
     if [ -z "$SERVER_BIN" ] || [ ! -x "$SERVER_BIN" ]; then
-        echo -e "${RED}[ERROR] Could not build or install llama-server. Please check free storage.${NC}"
-        exit 1
+        FOUND_ANY=$(find "$INSTALL_DIR" "$PREFIX/bin" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+        if [ -n "$FOUND_ANY" ]; then
+            SERVER_BIN="$FOUND_ANY"
+            chmod +x "$SERVER_BIN"
+        else
+            echo -e "${RED}[ERROR] Could not build or find llama-server executable.${NC}"
+            echo -e "${YELLOW}Tip: Run 'pkg install -y tur-repo && pkg install -y llama-cpp' in Termux to install directly.${NC}"
+            exit 1
+        fi
     fi
 
     echo -e "${GREEN}[✓] llama-server ready: $SERVER_BIN${NC}"
