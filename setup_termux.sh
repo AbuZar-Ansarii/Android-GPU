@@ -81,30 +81,30 @@ if [ "$SKIP_BUILD" != "1" ]; then
     pkg install -y vulkan-headers vulkan-loader-android 2>/dev/null || true
 
     echo -e "\n${YELLOW}[2/4] Cloning / Updating llama.cpp repository...${NC}"
-    if [ ! -d "$INSTALL_DIR" ]; then
-        git clone https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        echo -e "${BLUE}[*] Fetching llama.cpp (fast shallow clone)...${NC}"
+        rm -rf "$INSTALL_DIR"
+        git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
     else
-        echo "Updating existing llama.cpp repository..."
+        echo -e "${BLUE}[*] Updating existing llama.cpp repository...${NC}"
         cd "$INSTALL_DIR"
-        git pull origin master || true
+        git pull origin master 2>/dev/null || git pull origin main 2>/dev/null || true
     fi
 
     cd "$INSTALL_DIR"
 
     # Detect hardware capabilities
-    echo -e "\n${YELLOW}[3/4] Probing ARM CPU Vector & Hardware Capabilities...${NC}"
+    echo -e "\n${YELLOW}[3/4] Probing ARM Hardware Capabilities...${NC}"
     CPU_INFO=$(cat /proc/cpuinfo 2>/dev/null || true)
-    ARCH_FLAGS=""
     if echo "$CPU_INFO" | grep -q -i -E "asimddp|dotprod"; then
-        echo -e "${GREEN}[✓] Hardware ARM Dot Product (sdot/udot) detected! Turbo 4-bit GEMM enabled.${NC}"
-        ARCH_FLAGS="-DCMAKE_C_FLAGS=\"-O3 -march=armv8.2-a+fp16+dotprod\" -DCMAKE_CXX_FLAGS=\"-O3 -march=armv8.2-a+fp16+dotprod\""
+        echo -e "${GREEN}[✓] Hardware ARM Dot Product (sdot/udot) supported!${NC}"
     elif echo "$CPU_INFO" | grep -q -i -E "fp16|half"; then
-        echo -e "${GREEN}[✓] Hardware ARM FP16 vector instructions detected.${NC}"
-        ARCH_FLAGS="-DCMAKE_C_FLAGS=\"-O3 -march=armv8.2-a+fp16\" -DCMAKE_CXX_FLAGS=\"-O3 -march=armv8.2-a+fp16\""
+        echo -e "${GREEN}[✓] Hardware ARM FP16 vector instructions supported.${NC}"
     fi
 
     CORES=$(nproc 2>/dev/null || echo 4)
-    echo -e "${BLUE}Detected $CORES CPU cores for compilation.${NC}"
+    BUILD_CORES=$(( CORES > 4 ? 4 : CORES ))
+    echo -e "${BLUE}Detected $CORES CPU cores (using $BUILD_CORES parallel compiler threads to ensure RAM safety).${NC}"
 
     # Acceleration selection
     echo -e "\n${MAGENTA}====================================================${NC}"
@@ -115,15 +115,16 @@ if [ "$SKIP_BUILD" != "1" ]; then
     read -r -p "Enter choice [1-2] (Default: 1): " ACCEL_CHOICE </dev/tty || ACCEL_CHOICE="1"
     ACCEL_CHOICE=${ACCEL_CHOICE:-1}
 
-    echo -e "\n${YELLOW}[4/4] Configuring & Compiling llama-server (this may take a few minutes)...${NC}"
-    rm -rf build
-    mkdir -p build
+    echo -e "\n${YELLOW}[4/4] Configuring & Compiling llama-server...${NC}"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
 
     BUILD_SUCCESS=0
     if [ "$ACCEL_CHOICE" -eq 1 ]; then
-        echo -e "${BLUE}[*] Attempting Vulkan Mobile GPU build...${NC}"
-        if cmake -B build -DGGML_VULKAN=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS 2>/dev/null; then
-            if cmake --build build --target llama-server rpc-server -j"$CORES" 2>/dev/null || cmake --build build -j"$CORES" 2>/dev/null; then
+        echo -e "${BLUE}[*] Configuring build with Vulkan Mobile GPU support...${NC}"
+        if cmake -B build -DGGML_VULKAN=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release; then
+            echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU acceleration...${NC}"
+            if cmake --build build --target llama-server -j"$BUILD_CORES"; then
                 if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
                     echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
                     BUILD_SUCCESS=1
@@ -132,15 +133,16 @@ if [ "$SKIP_BUILD" != "1" ]; then
         fi
 
         if [ "$BUILD_SUCCESS" -ne 1 ]; then
-            echo -e "${YELLOW}[!] Vulkan GPU build unavailable on this device ROM. Falling back to Turbo ARM CPU build...${NC}"
-            rm -rf build && mkdir -p build
+            echo -e "${YELLOW}[!] Vulkan GPU build unavailable on this device ROM. Falling back to Optimized ARM CPU build...${NC}"
+            rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
         fi
     fi
 
     if [ "$BUILD_SUCCESS" -ne 1 ]; then
-        echo -e "${BLUE}[*] Building Turbo ARM CPU (NEON + Hardware Vector)...${NC}"
-        cmake -B build -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS
-        cmake --build build --target llama-server rpc-server -j"$CORES" 2>/dev/null || cmake --build build -j"$CORES"
+        echo -e "${BLUE}[*] Configuring Optimized ARM CPU build...${NC}"
+        cmake -B build -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release
+        echo -e "${BLUE}[*] Compiling llama-server for ARM CPU...${NC}"
+        cmake --build build --target llama-server -j"$BUILD_CORES"
     fi
 
     if [ -f "$BUILD_DIR/bin/llama-server" ]; then
