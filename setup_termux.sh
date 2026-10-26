@@ -1,11 +1,9 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ==============================================================================
-# Phone as GPU: Complete Termux AI Hub Setup
-# Builds llama.cpp with Hardware Acceleration (Vulkan Mobile GPU / ARM DotProd),
-# sets up model catalog, starts Web UI + OpenAI API Server
+# Phone as GPU: Universal Adaptive Setup for Any Android Phone
+# Detects Hardware & Processor, Auto-Configures Optimal Acceleration Engine,
+# Builds/Installs llama-server, and Launches Web UI + OpenAI API Server
 # ==============================================================================
-
-set -e
 
 # Terminal Colors
 RED='\033[0;31m'
@@ -18,22 +16,19 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 echo -e "${CYAN}====================================================${NC}"
-echo -e "${GREEN}${BOLD}   📱 Phone as GPU: Local AI Hub Automated Setup    ${NC}"
+echo -e "${GREEN}${BOLD}   📱 Phone as GPU: Local AI Hub Universal Setup    ${NC}"
 echo -e "${CYAN}====================================================${NC}"
 
-# 0. Auto-Bootstrap: If executed outside repo (e.g. via curl), clone the repo automatically
+# 0. Auto-Bootstrap: If executed outside repo (e.g. via curl), clone latest repo automatically
 REPO_DIR="$HOME/Android-GPU"
 if [ ! -f "app.py" ] || [ ! -d "web" ]; then
-    echo -e "${YELLOW}[*] Preparing environment and cloning Android-GPU repository...${NC}"
+    echo -e "${YELLOW}[*] Preparing environment and fetching latest Android-GPU...${NC}"
     if ! command -v git >/dev/null 2>&1; then
         pkg update -y 2>/dev/null || true
-        pkg install -y git
+        pkg install -y git 2>/dev/null || true
     fi
-    if [ ! -d "$REPO_DIR" ]; then
-        git clone https://github.com/AbuZar-Ansarii/Android-GPU.git "$REPO_DIR"
-    else
-        cd "$REPO_DIR" && git pull origin main || true
-    fi
+    rm -rf "$REPO_DIR"
+    git clone --depth 1 https://github.com/AbuZar-Ansarii/Android-GPU.git "$REPO_DIR"
     cd "$REPO_DIR"
     chmod +x setup_termux.sh
     exec bash setup_termux.sh </dev/tty
@@ -48,10 +43,67 @@ fi
 # Request storage permission if not already granted
 if [ ! -d "$HOME/storage" ]; then
     echo -e "${BLUE}[*] Setting up phone storage access...${NC}"
-    termux-setup-storage || true
+    termux-setup-storage 2>/dev/null || true
 fi
 
-# 2. Check if llama-server is already compiled
+# ==============================================================================
+# 🔍 STEP 1: DETECT PHONE HARDWARE & PROCESSOR PROFILE
+# ==============================================================================
+DEVICE_BRAND=$(getprop ro.product.brand 2>/dev/null || echo "")
+DEVICE_MODEL=$(getprop ro.product.model 2>/dev/null || getprop ro.product.device 2>/dev/null || echo "Android Device")
+DEVICE_MANUF=$(getprop ro.product.manufacturer 2>/dev/null || echo "$DEVICE_BRAND")
+SOC_NAME=$(getprop ro.soc.model 2>/dev/null || getprop ro.board.platform 2>/dev/null || grep -m1 "Hardware" /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | xargs || echo "ARM64 Processor")
+ARCH=$(uname -m 2>/dev/null || echo "aarch64")
+CORES=$(nproc 2>/dev/null || echo 4)
+TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "4000000")
+RAM_GB=$(( (TOTAL_RAM_KB + 500000) / 1024 / 1024 ))
+ANDROID_VER=$(getprop ro.build.version.release 2>/dev/null || echo "Unknown")
+
+# Format full device name
+FULL_DEVICE_NAME="${DEVICE_MANUF} ${DEVICE_MODEL}"
+if [ -z "$DEVICE_MANUF" ] || [ "$DEVICE_MANUF" = "$DEVICE_MODEL" ]; then
+    FULL_DEVICE_NAME="$DEVICE_MODEL"
+fi
+
+# Detect CPU SIMD & Vector extensions
+CPU_INFO=$(cat /proc/cpuinfo 2>/dev/null || true)
+HAS_DOTPROD=0
+HAS_FP16=0
+if echo "$CPU_INFO" | grep -q -i -E "asimddp|dotprod"; then
+    HAS_DOTPROD=1
+fi
+if echo "$CPU_INFO" | grep -q -i -E "fp16|half"; then
+    HAS_FP16=1
+fi
+
+# Detect Vulkan Mobile GPU driver
+HAS_VULKAN=0
+if [ -e "/system/lib64/libvulkan.so" ] || [ -e "/vendor/lib64/hw/vulkan."* ] || [ -e "/system/lib/libvulkan.so" ] || command -v vulkaninfo >/dev/null 2>&1; then
+    HAS_VULKAN=1
+fi
+
+echo -e "\n${CYAN}====================================================${NC}"
+echo -e "${GREEN}${BOLD}   📱 DETECTED PHONE HARDWARE & PROCESSOR PROFILE   ${NC}"
+echo -e "${CYAN}====================================================${NC}"
+echo -e " 📲 Device        : ${YELLOW}${BOLD}${FULL_DEVICE_NAME}${NC} (Android ${ANDROID_VER})"
+echo -e " 🧠 Processor     : ${YELLOW}${BOLD}${SOC_NAME}${NC} (${ARCH})"
+echo -e " ⚡ CPU Cores     : ${CYAN}${CORES} Cores detected${NC}"
+echo -e " 💾 System Memory : ${CYAN}${RAM_GB} GB RAM detected${NC}"
+if [ "$HAS_DOTPROD" -eq 1 ]; then
+    echo -e " 🚀 Vector Math   : ${GREEN}${BOLD}ARM NEON + Hardware Dot-Product (sdot/udot)${NC}"
+else
+    echo -e " 🚀 Vector Math   : ${YELLOW}Standard ARM NEON Vector Engine${NC}"
+fi
+if [ "$HAS_VULKAN" -eq 1 ]; then
+    echo -e " 🎮 Mobile GPU    : ${GREEN}${BOLD}Vulkan Hardware Acceleration Driver DETECTED${NC}"
+else
+    echo -e " 🎮 Mobile GPU    : ${YELLOW}CPU-Only Engine (No Vulkan driver found)${NC}"
+fi
+echo -e "${CYAN}====================================================${NC}\n"
+
+# ==============================================================================
+# ⚙️ STEP 2: CHECK / PREPARE INFERENCE BACKEND
+# ==============================================================================
 INSTALL_DIR="$HOME/llama.cpp"
 BUILD_DIR="$INSTALL_DIR/build"
 MODELS_DIR="$HOME/models"
@@ -62,68 +114,71 @@ if [ -f "$BUILD_DIR/bin/llama-server" ]; then
     SERVER_BIN="$BUILD_DIR/bin/llama-server"
 elif [ -f "$BUILD_DIR/bin/server" ]; then
     SERVER_BIN="$BUILD_DIR/bin/server"
+elif command -v llama-server >/dev/null 2>&1; then
+    SERVER_BIN=$(command -v llama-server)
 fi
 
+SKIP_BUILD=0
 if [ -n "$SERVER_BIN" ]; then
-    echo -e "${GREEN}[✓] llama-server is already compiled!${NC}"
-    read -r -p "Do you want to recompile with maximum speed/Vulkan acceleration? (y/N): " REBUILD </dev/tty || REBUILD="N"
+    echo -e "${GREEN}[✓] llama-server is already installed and ready at: $SERVER_BIN${NC}"
+    read -r -p "Do you want to recompile/update the engine? (y/N): " REBUILD </dev/tty || REBUILD="N"
     if [[ ! "$REBUILD" =~ ^[Yy]$ ]]; then
         SKIP_BUILD=1
     fi
 fi
 
-if [ "$SKIP_BUILD" != "1" ]; then
-    echo -e "\n${YELLOW}[1/4] Installing necessary packages and build tools...${NC}"
+if [ "$SKIP_BUILD" -ne 1 ]; then
+    echo -e "${YELLOW}[1/4] Installing build tools and packages...${NC}"
     pkg update -y 2>/dev/null || true
     pkg install -y git cmake clang make termux-tools python iproute2 curl
-    # Optionally install OpenMP (libomp) and Vulkan libraries if available in Termux
     pkg install -y libomp 2>/dev/null || true
-    pkg install -y vulkan-headers vulkan-loader-android 2>/dev/null || true
+    if [ "$HAS_VULKAN" -eq 1 ]; then
+        pkg install -y vulkan-headers vulkan-loader-android 2>/dev/null || true
+    fi
 
-    echo -e "\n${YELLOW}[2/4] Cloning / Updating llama.cpp repository...${NC}"
+    echo -e "\n${YELLOW}[2/4] Fetching llama.cpp source code...${NC}"
     if [ ! -d "$INSTALL_DIR/.git" ]; then
-        echo -e "${BLUE}[*] Fetching llama.cpp (fast shallow clone)...${NC}"
+        echo -e "${BLUE}[*] Cloning fresh llama.cpp repository (shallow clone)...${NC}"
         rm -rf "$INSTALL_DIR"
         git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
     else
         echo -e "${BLUE}[*] Updating existing llama.cpp repository...${NC}"
         cd "$INSTALL_DIR"
-        git pull origin master 2>/dev/null || git pull origin main 2>/dev/null || true
+        git fetch --depth 1 origin 2>/dev/null || true
+        git reset --hard origin/master 2>/dev/null || git reset --hard origin/main 2>/dev/null || true
     fi
 
     cd "$INSTALL_DIR"
 
-    # Detect hardware capabilities
-    echo -e "\n${YELLOW}[3/4] Probing ARM Hardware Capabilities...${NC}"
-    CPU_INFO=$(cat /proc/cpuinfo 2>/dev/null || true)
-    if echo "$CPU_INFO" | grep -q -i -E "asimddp|dotprod"; then
-        echo -e "${GREEN}[✓] Hardware ARM Dot Product (sdot/udot) supported!${NC}"
-    elif echo "$CPU_INFO" | grep -q -i -E "fp16|half"; then
-        echo -e "${GREEN}[✓] Hardware ARM FP16 vector instructions supported.${NC}"
+    # Limit compiler jobs to prevent Android from killing clang due to RAM pressure
+    BUILD_CORES=$(( CORES > 4 ? 4 : (CORES > 1 ? CORES : 1) ))
+    echo -e "\n${YELLOW}[3/4] Configuring compiler for ${SOC_NAME} (using ${BUILD_CORES} RAM-safe jobs)...${NC}"
+
+    # Acceleration selection based on detected processor
+    DEFAULT_ACCEL=2
+    if [ "$HAS_VULKAN" -eq 1 ]; then
+        DEFAULT_ACCEL=1
     fi
 
-    CORES=$(nproc 2>/dev/null || echo 4)
-    BUILD_CORES=$(( CORES > 4 ? 4 : CORES ))
-    echo -e "${BLUE}Detected $CORES CPU cores (using $BUILD_CORES parallel compiler threads to ensure RAM safety).${NC}"
-
-    # Acceleration selection
-    echo -e "\n${MAGENTA}====================================================${NC}"
-    echo -e "${GREEN}${BOLD}   ⚡ SELECT ACCELERATION BACKEND                  ${NC}"
     echo -e "${MAGENTA}====================================================${NC}"
-    echo -e " 1) ${CYAN}Vulkan Mobile GPU + ARM NEON${NC}  (Fastest! Uses Adreno/Mali GPU + CPU)"
+    echo -e "${GREEN}${BOLD}   ⚡ SELECT ACCELERATION ENGINE                   ${NC}"
+    echo -e "${MAGENTA}====================================================${NC}"
+    echo -e " 1) ${CYAN}Vulkan Mobile GPU + ARM NEON${NC}  (Recommended: Uses Adreno/Mali GPU + CPU)"
     echo -e " 2) ${CYAN}Turbo ARM CPU (NEON+DotProd)${NC}  (Pure CPU with hardware vector math)"
-    read -r -p "Enter choice [1-2] (Default: 1): " ACCEL_CHOICE </dev/tty || ACCEL_CHOICE="1"
-    ACCEL_CHOICE=${ACCEL_CHOICE:-1}
+    read -r -p "Enter choice [1-2] (Default: $DEFAULT_ACCEL): " ACCEL_CHOICE </dev/tty || ACCEL_CHOICE="$DEFAULT_ACCEL"
+    ACCEL_CHOICE=${ACCEL_CHOICE:-$DEFAULT_ACCEL}
 
-    echo -e "\n${YELLOW}[4/4] Configuring & Compiling llama-server...${NC}"
+    echo -e "\n${YELLOW}[4/4] Building llama-server...${NC}"
     rm -rf "$BUILD_DIR"
     mkdir -p "$BUILD_DIR"
 
     BUILD_SUCCESS=0
-    if [ "$ACCEL_CHOICE" -eq 1 ]; then
-        echo -e "${BLUE}[*] Configuring build with Vulkan Mobile GPU support...${NC}"
-        if cmake -B build -DGGML_VULKAN=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release; then
-            echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU acceleration...${NC}"
+
+    # Tier 1: Vulkan Mobile GPU Build
+    if [ "$ACCEL_CHOICE" -eq 1 ] && [ "$HAS_VULKAN" -eq 1 ]; then
+        echo -e "${BLUE}[*] Configuring with Vulkan GPU acceleration...${NC}"
+        if cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release 2>&1; then
+            echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU support (${BUILD_CORES} parallel jobs)...${NC}"
             if cmake --build build --target llama-server -j"$BUILD_CORES"; then
                 if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
                     echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
@@ -133,39 +188,59 @@ if [ "$SKIP_BUILD" != "1" ]; then
         fi
 
         if [ "$BUILD_SUCCESS" -ne 1 ]; then
-            echo -e "${YELLOW}[!] Vulkan GPU build unavailable on this device ROM. Falling back to Optimized ARM CPU build...${NC}"
+            echo -e "${YELLOW}[!] Vulkan GPU build could not link on this ROM. Switching to Optimized CPU build...${NC}"
             rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
         fi
     fi
 
+    # Tier 2: Optimized ARM CPU Build
     if [ "$BUILD_SUCCESS" -ne 1 ]; then
         echo -e "${BLUE}[*] Configuring Optimized ARM CPU build...${NC}"
-        cmake -B build -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release
-        echo -e "${BLUE}[*] Compiling llama-server for ARM CPU...${NC}"
-        cmake --build build --target llama-server -j"$BUILD_CORES"
+        if cmake -B build -DCMAKE_BUILD_TYPE=Release 2>&1; then
+            echo -e "${BLUE}[*] Compiling llama-server for ARM CPU (${BUILD_CORES} parallel jobs)...${NC}"
+            if cmake --build build --target llama-server -j"$BUILD_CORES"; then
+                if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
+                    echo -e "${GREEN}[✓] Compiled successfully for ARM CPU!${NC}"
+                    BUILD_SUCCESS=1
+                fi
+            fi
+        fi
+    fi
+
+    # Tier 3: Pre-compiled Package Fallback (Guaranteed to work on any phone)
+    if [ "$BUILD_SUCCESS" -ne 1 ]; then
+        echo -e "${YELLOW}[*] Source compilation was incomplete. Installing pre-compiled official package...${NC}"
+        pkg install -y llama.cpp 2>/dev/null || true
+        if command -v llama-server >/dev/null 2>&1; then
+            SERVER_BIN=$(command -v llama-server)
+            echo -e "${GREEN}[✓] Installed pre-compiled llama-server successfully!${NC}"
+            BUILD_SUCCESS=1
+        fi
     fi
 
     if [ -f "$BUILD_DIR/bin/llama-server" ]; then
         SERVER_BIN="$BUILD_DIR/bin/llama-server"
     elif [ -f "$BUILD_DIR/bin/server" ]; then
         SERVER_BIN="$BUILD_DIR/bin/server"
-    else
-        echo -e "${RED}[ERROR] Compilation completed but llama-server was not found!${NC}"
+    elif command -v llama-server >/dev/null 2>&1; then
+        SERVER_BIN=$(command -v llama-server)
+    fi
+
+    if [ -z "$SERVER_BIN" ] || [ ! -x "$SERVER_BIN" ]; then
+        echo -e "${RED}[ERROR] Could not build or install llama-server. Please check free storage.${NC}"
         exit 1
     fi
 
-    echo -e "${GREEN}[✓] llama-server successfully compiled and ready for high-speed inference!${NC}"
+    echo -e "${GREEN}[✓] llama-server ready: $SERVER_BIN${NC}"
 fi
 
-# 3. Interactive Model Selection by Phone RAM Tier
+# ==============================================================================
+# 🧠 STEP 3: INTERACTIVE MODEL SELECTION BY PHONE RAM TIER
+# ==============================================================================
 EXISTING_MODELS=$(ls "$MODELS_DIR"/*.gguf 2>/dev/null | wc -l)
 if [ "$EXISTING_MODELS" -eq 0 ]; then
-    # Detect Phone RAM
-    TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "4000000")
-    RAM_GB=$(( (TOTAL_RAM_KB + 500000) / 1024 / 1024 ))
-    
     echo -e "\n${MAGENTA}====================================================${NC}"
-    echo -e "${GREEN}${BOLD}   🧠 SELECT A MODEL MATCHED TO YOUR PHONE RAM     ${NC}"
+    echo -e "${GREEN}${BOLD}   🧠 SELECT A MODEL MATCHED TO YOUR ${RAM_GB}GB RAM        ${NC}"
     echo -e "${MAGENTA}====================================================${NC}"
     echo -e "Detected Phone RAM: ${YELLOW}${BOLD}${RAM_GB} GB${NC}"
     if [ "$RAM_GB" -le 4 ]; then
@@ -272,16 +347,18 @@ if [ "$EXISTING_MODELS" -eq 0 ]; then
     fi
 fi
 
-# 4. Start the Web UI & API Server
+# ==============================================================================
+# 🚀 STEP 4: LAUNCH AI HUB (WEB UI + OPENAI API)
+# ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PHONE_IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "127.0.0.1")
 
 echo -e "\n${CYAN}====================================================${NC}"
-echo -e "${GREEN}   🚀 STARTING ACCELERATED AI HUB (WEB UI + API)    ${NC}"
+echo -e "${GREEN}   🚀 STARTING LOCAL AI HUB (WEB UI + API)         ${NC}"
 echo -e "${CYAN}====================================================${NC}"
-echo -e "Phone Web UI : ${YELLOW}http://localhost:8080${NC}"
-echo -e "PC Wi-Fi     : ${YELLOW}http://$PHONE_IP:8080${NC}"
-echo -e "PC USB (ADB) : ${CYAN}adb forward tcp:8080 tcp:8080${NC} -> ${YELLOW}http://localhost:8080${NC}"
+echo -e " Phone Web UI : ${YELLOW}http://localhost:8080${NC}"
+echo -e " PC Wi-Fi     : ${YELLOW}http://$PHONE_IP:8080${NC}"
+echo -e " PC USB (ADB) : ${CYAN}adb forward tcp:8080 tcp:8080${NC} -> ${YELLOW}http://localhost:8080${NC}"
 echo -e "${CYAN}====================================================${NC}\n"
 
 exec python3 "$SCRIPT_DIR/app.py"
