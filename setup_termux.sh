@@ -37,6 +37,13 @@ else
     git pull origin main 2>/dev/null || true
 fi
 
+# Ensure Python 3 and Curl are installed
+if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    echo -e "${YELLOW}[*] Installing essential packages (Python 3 & Curl)...${NC}"
+    pkg update -y 2>/dev/null || true
+    pkg install -y python curl 2>/dev/null || true
+fi
+
 # 1. Acquire Wake-Lock to keep phone CPU active in background
 if command -v termux-wake-lock >/dev/null 2>&1; then
     echo -e "${BLUE}[*] Acquiring CPU wake-lock (prevents sleeping)...${NC}"
@@ -112,20 +119,27 @@ BUILD_DIR="$INSTALL_DIR/build"
 MODELS_DIR="$HOME/models"
 mkdir -p "$MODELS_DIR"
 
-SERVER_BIN=""
-if [ -f "$BUILD_DIR/bin/llama-server" ]; then
-    SERVER_BIN="$BUILD_DIR/bin/llama-server"
-elif [ -f "$INSTALL_DIR/bin/llama-server" ]; then
-    SERVER_BIN="$INSTALL_DIR/bin/llama-server"
-elif [ -f "$INSTALL_DIR/llama-server" ]; then
-    SERVER_BIN="$INSTALL_DIR/llama-server"
-elif [ -f "$BUILD_DIR/bin/server" ]; then
-    SERVER_BIN="$BUILD_DIR/bin/server"
-elif command -v llama-server >/dev/null 2>&1; then
-    SERVER_BIN=$(command -v llama-server)
-elif [ -x "$PREFIX/bin/llama-server" ]; then
-    SERVER_BIN="$PREFIX/bin/llama-server"
-fi
+find_existing_server() {
+    for p in \
+        "$BUILD_DIR/bin/llama-server" \
+        "$INSTALL_DIR/bin/llama-server" \
+        "$INSTALL_DIR/llama-server" \
+        "$HOME/bin/llama-server" \
+        "$PREFIX/bin/llama-server" \
+        "/data/data/com.termux/files/usr/bin/llama-server"; do
+        if [ -f "$p" ] && [ -x "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    if command -v llama-server >/dev/null 2>&1; then
+        command -v llama-server
+        return 0
+    fi
+    return 1
+}
+
+SERVER_BIN=$(find_existing_server || echo "")
 
 SKIP_BUILD=0
 if [ -n "$SERVER_BIN" ] && [ -x "$SERVER_BIN" ]; then
@@ -140,17 +154,18 @@ fi
 install_precompiled_engine() {
     echo -e "${BLUE}[*] Fetching verified pre-compiled high-speed engine for Android...${NC}"
     mkdir -p "$BUILD_DIR/bin"
-    mkdir -p "$INSTALL_DIR/lib"
     mkdir -p "$INSTALL_DIR/bin"
+    mkdir -p "$INSTALL_DIR/lib"
 
-    # Strategy 1: Termux official repository package (llama-cpp)
-    echo -e "${CYAN}[1/2] Checking Termux official package repository...${NC}"
+    # Strategy 1: Termux official package repository (llama-cpp via TUR or main)
+    echo -e "${CYAN}[1/3] Checking Termux official package repository...${NC}"
+    pkg install -y tur-repo 2>/dev/null || true
+    pkg update -y 2>/dev/null || apt-get update -y 2>/dev/null || true
     pkg install -y libandroid-spawn 2>/dev/null || true
     if pkg install -y llama-cpp 2>/dev/null || pkg install -y llama.cpp 2>/dev/null; then
-        SYS_BIN=$(command -v llama-server || which llama-server 2>/dev/null || echo "$PREFIX/bin/llama-server")
-        if [ -x "$SYS_BIN" ]; then
+        SYS_BIN=$(find_existing_server || echo "")
+        if [ -n "$SYS_BIN" ] && [ -x "$SYS_BIN" ]; then
             SERVER_BIN="$SYS_BIN"
-            mkdir -p "$BUILD_DIR/bin"
             cp -f "$SERVER_BIN" "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
             chmod +x "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
             echo -e "${GREEN}[✓] llama-server installed successfully via Termux package manager!${NC}"
@@ -158,47 +173,205 @@ install_precompiled_engine() {
         fi
     fi
 
-    # Strategy 2: Official Pre-compiled Android Release from GitHub (ggml-org/llama.cpp)
-    echo -e "${CYAN}[2/2] Fetching official high-performance Android ARM64 release from GitHub...${NC}"
-    RELEASE_TAG="b11889"
-    ASSET_NAME="llama-${RELEASE_TAG}-bin-android-arm64.tar.gz"
+    # Strategy 2: Python-powered native release download & extraction (Zero external dependencies)
+    echo -e "${CYAN}[2/3] Downloading official Android ARM64 release from GitHub (with Python)...${NC}"
+    export PHONE_SOC="$SOC_NAME"
+    export PHONE_DEV="$FULL_DEVICE_NAME"
+    if python3 - << 'PY_EOF'
+import sys, os, urllib.request, ssl, tarfile, shutil
 
-    if echo "${SOC_NAME} ${FULL_DEVICE_NAME}" | grep -q -i -E "snapdragon|qualcomm|sm[0-9]{4}|qcom"; then
-        ASSET_NAME="llama-${RELEASE_TAG}-bin-android-arm64-snapdragon.tar.gz"
-        echo -e "${GREEN}[*] Qualcomm Snapdragon chip detected: Using dedicated Snapdragon NPU/GPU engine!${NC}"
-    else
-        echo -e "${GREEN}[*] Mobile ARM64 processor detected: Using universal ARMv8/v9 optimized engine!${NC}"
+dest_dir = os.path.expanduser("~/llama.cpp")
+build_bin = os.path.join(dest_dir, "build", "bin")
+os.makedirs(dest_dir, exist_ok=True)
+os.makedirs(build_bin, exist_ok=True)
+
+soc = os.environ.get("PHONE_SOC", "").lower()
+dev = os.environ.get("PHONE_DEV", "").lower()
+
+# Build URL list (Snapdragon hardware release first if Qualcomm detected, plus universal fallbacks)
+urls = []
+if any(k in soc or k in dev for k in ["snapdragon", "qualcomm", "qcom", "sm8", "sm7", "sm6", "sm4"]):
+    print("[*] Qualcomm Snapdragon chip detected: Using dedicated Snapdragon NPU/GPU engine")
+    urls.append("https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64-snapdragon.tar.gz")
+
+urls.extend([
+    "https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64.tar.gz",
+    "https://github.com/ggml-org/llama.cpp/releases/download/b11888/llama-b11888-bin-android-arm64.tar.gz"
+])
+
+ctx = ssl._create_unverified_context()
+success = False
+tmp_tar = os.path.expanduser("~/llama_tmp.tar.gz")
+
+for url in urls:
+    print(f"[*] Downloading engine from: {url}")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+            total = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            with open(tmp_tar, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0 and downloaded % (1024 * 1024 * 10) < 65536:
+                        pct = int((downloaded / total) * 100)
+                        print(f"[*] Progress: {pct}% ({downloaded // (1024*1024)}MB / {total // (1024*1024)}MB)")
+            
+            print("[*] Unpacking engine binaries and hardware acceleration libraries...")
+            with tarfile.open(tmp_tar, "r:gz") as tar:
+                tar.extractall(dest_dir)
+            try:
+                os.remove(tmp_tar)
+            except Exception:
+                pass
+            success = True
+            break
+    except Exception as e:
+        print(f"[!] Download attempt failed: {e}")
+        if os.path.exists(tmp_tar):
+            try:
+                os.remove(tmp_tar)
+            except Exception:
+                pass
+
+if not success:
+    sys.exit(1)
+
+# Find llama-server anywhere inside dest_dir
+found = None
+for root, dirs, files in os.walk(dest_dir):
+    for f in files:
+        if f.endswith(".so"):
+            try:
+                os.chmod(os.path.join(root, f), 0o755)
+            except Exception:
+                pass
+        if f in ("llama-server", "server"):
+            fp = os.path.join(root, f)
+            try:
+                os.chmod(fp, 0o755)
+            except Exception:
+                pass
+            found = fp
+
+if found:
+    target = os.path.join(build_bin, "llama-server")
+    try:
+        shutil.copy2(found, target)
+        os.chmod(target, 0o755)
+    except Exception:
+        target = found
+    print(f"[✓] Engine ready at: {target}")
+    sys.exit(0)
+else:
+    print("[ERROR] llama-server not found in extracted archive")
+    sys.exit(1)
+PY_EOF
+    then
+        SERVER_BIN=$(find_existing_server || echo "")
+        if [ -n "$SERVER_BIN" ] && [ -x "$SERVER_BIN" ]; then
+            echo -e "${GREEN}[✓] Pre-compiled high-performance llama-server is ready: $SERVER_BIN${NC}"
+            return 0
+        fi
     fi
 
-    DOWNLOAD_URL="https://github.com/ggml-org/llama.cpp/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
-    FALLBACK_URL="https://github.com/ggml-org/llama.cpp/releases/download/${RELEASE_TAG}/llama-${RELEASE_TAG}-bin-android-arm64.tar.gz"
+    # Strategy 3: Direct curl + tar fallback with insecure SSL & retries
+    echo -e "${CYAN}[3/3] Trying curl fallback download...${NC}"
+    pkg install -y ca-certificates tar gzip curl 2>/dev/null || true
     TMP_ARCHIVE="$HOME/llama-android.tar.gz"
     rm -f "$TMP_ARCHIVE"
-
-    echo -e "${BLUE}[*] Downloading engine archive (${ASSET_NAME})...${NC}"
-    if ! curl -L --fail --connect-timeout 20 -# -o "$TMP_ARCHIVE" "$DOWNLOAD_URL"; then
-        echo -e "${YELLOW}[*] Downloading universal ARM64 engine fallback...${NC}"
-        curl -L --fail --connect-timeout 20 -# -o "$TMP_ARCHIVE" "$FALLBACK_URL" || true
-    fi
-
+    curl -k -L --retry 3 --connect-timeout 20 -# -o "$TMP_ARCHIVE" "https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64.tar.gz" || true
     if [ -f "$TMP_ARCHIVE" ] && [ -s "$TMP_ARCHIVE" ]; then
-        echo -e "${BLUE}[*] Unpacking engine and hardware acceleration libraries...${NC}"
-        mkdir -p "$INSTALL_DIR"
-        tar -xzf "$TMP_ARCHIVE" -C "$INSTALL_DIR" --strip-components=1 2>/dev/null || tar -xzf "$TMP_ARCHIVE" -C "$INSTALL_DIR" 2>/dev/null || true
+        tar -xzf "$TMP_ARCHIVE" -C "$INSTALL_DIR" 2>/dev/null || true
         rm -f "$TMP_ARCHIVE"
-
-        # Locate llama-server anywhere inside INSTALL_DIR
         FOUND_BIN=$(find "$INSTALL_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
         if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+            chmod +x "$FOUND_BIN"
             mkdir -p "$BUILD_DIR/bin"
             cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
             chmod +x "$BUILD_DIR/bin/llama-server"
-            chmod +x "$FOUND_BIN"
-            # Ensure permissions on all shared libraries
-            find "$INSTALL_DIR" -type f -name "*.so" -exec chmod +x {} + 2>/dev/null || true
             SERVER_BIN="$BUILD_DIR/bin/llama-server"
-            echo -e "${GREEN}[✓] Pre-compiled high-performance llama-server is ready: $SERVER_BIN${NC}"
+            echo -e "${GREEN}[✓] Pre-compiled llama-server ready: $SERVER_BIN${NC}"
             return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Function: Compile from source (CPU or Vulkan)
+compile_from_source() {
+    USE_VULKAN=$1
+    echo -e "\n${YELLOW}[1/3] Installing build tools and compilation packages...${NC}"
+    pkg update -y 2>/dev/null || true
+    pkg install -y git cmake clang ninja make termux-tools python iproute2 curl libandroid-spawn 2>/dev/null || pkg install -y git cmake clang make termux-tools python iproute2 curl libandroid-spawn
+    pkg install -y libomp 2>/dev/null || true
+    if [ "$USE_VULKAN" -eq 1 ] && [ "$HAS_VULKAN" -eq 1 ]; then
+        echo -e "${BLUE}[*] Installing Vulkan GPU libraries and shader compiler (glslang)...${NC}"
+        pkg install -y vulkan-headers vulkan-loader vulkan-tools glslang 2>/dev/null || true
+        pkg install -y vulkan-loader-android 2>/dev/null || true
+    fi
+
+    echo -e "\n${YELLOW}[2/3] Fetching llama.cpp source code...${NC}"
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        echo -e "${BLUE}[*] Cloning fresh llama.cpp repository (shallow clone)...${NC}"
+        rm -rf "$INSTALL_DIR"
+        git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$INSTALL_DIR" || git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
+    else
+        echo -e "${BLUE}[*] Updating existing llama.cpp repository...${NC}"
+        cd "$INSTALL_DIR"
+        git fetch --depth 1 origin 2>/dev/null || true
+        git reset --hard origin/master 2>/dev/null || git reset --hard origin/main 2>/dev/null || true
+    fi
+
+    cd "$INSTALL_DIR"
+    BUILD_CORES=$(( CORES > 4 ? 4 : (CORES > 1 ? CORES : 1) ))
+    echo -e "\n${YELLOW}[3/3] Compiling llama-server for ${SOC_NAME} (using ${BUILD_CORES} RAM-safe jobs)...${NC}"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+
+    CMAKE_GEN=""
+    if command -v ninja >/dev/null 2>&1; then
+        CMAKE_GEN="-G Ninja"
+    fi
+
+    if [ "$USE_VULKAN" -eq 1 ] && [ "$HAS_VULKAN" -eq 1 ]; then
+        echo -e "${BLUE}[*] Configuring with Vulkan GPU acceleration...${NC}"
+        if cmake -B build $CMAKE_GEN -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF -DGGML_OPENMP=OFF; then
+            echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU support (${BUILD_CORES} parallel jobs)...${NC}"
+            if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
+                FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+                if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+                    mkdir -p "$BUILD_DIR/bin"
+                    cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
+                    chmod +x "$BUILD_DIR/bin/llama-server"
+                    SERVER_BIN="$BUILD_DIR/bin/llama-server"
+                    echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
+                    return 0
+                fi
+            fi
+        fi
+        echo -e "${YELLOW}[!] Vulkan GPU build could not link on this ROM. Switching to Optimized CPU build...${NC}"
+        rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
+    fi
+
+    echo -e "${BLUE}[*] Configuring Optimized ARM CPU build...${NC}"
+    if cmake -B build $CMAKE_GEN -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF -DGGML_OPENMP=OFF; then
+        echo -e "${BLUE}[*] Compiling llama-server for ARM CPU (${BUILD_CORES} parallel jobs)...${NC}"
+        if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
+            FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+            if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
+                mkdir -p "$BUILD_DIR/bin"
+                cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
+                chmod +x "$BUILD_DIR/bin/llama-server"
+                SERVER_BIN="$BUILD_DIR/bin/llama-server"
+                echo -e "${GREEN}[✓] Compiled successfully for ARM CPU!${NC}"
+                return 0
+            fi
         fi
     fi
 
@@ -219,114 +392,52 @@ if [ "$SKIP_BUILD" -ne 1 ]; then
 
     # Option 1: Fast Pre-Compiled Engine
     if [ "$ENGINE_CHOICE" -eq 1 ]; then
-        echo -e "\n${YELLOW}[1/2] Installing base system dependencies...${NC}"
-        pkg update -y 2>/dev/null || true
-        pkg install -y python iproute2 curl termux-tools 2>/dev/null || true
-        echo -e "\n${YELLOW}[2/2] Setting up pre-compiled inference engine...${NC}"
         if install_precompiled_engine; then
             BUILD_SUCCESS=1
+        else
+            echo -e "${YELLOW}[!] Pre-compiled download encountered an issue. Falling back to local ARM CPU compilation...${NC}"
+            if compile_from_source 0; then
+                BUILD_SUCCESS=1
+            fi
         fi
     fi
 
-    # Option 2 or 3: Compile from source
-    if [ "$ENGINE_CHOICE" -eq 2 ] || [ "$ENGINE_CHOICE" -eq 3 ]; then
-        echo -e "\n${YELLOW}[1/4] Installing build tools and packages...${NC}"
-        pkg update -y 2>/dev/null || true
-        pkg install -y git cmake clang ninja make termux-tools python iproute2 curl libandroid-spawn 2>/dev/null || pkg install -y git cmake clang make termux-tools python iproute2 curl libandroid-spawn
-        pkg install -y libomp 2>/dev/null || true
-        if [ "$ENGINE_CHOICE" -eq 2 ] && [ "$HAS_VULKAN" -eq 1 ]; then
-            echo -e "${BLUE}[*] Installing Vulkan GPU libraries and shader compiler (glslang)...${NC}"
-            pkg install -y vulkan-headers vulkan-loader vulkan-tools glslang 2>/dev/null || true
-            pkg install -y vulkan-loader-android 2>/dev/null || true
-        fi
-
-        echo -e "\n${YELLOW}[2/4] Fetching llama.cpp source code...${NC}"
-        if [ ! -d "$INSTALL_DIR/.git" ]; then
-            echo -e "${BLUE}[*] Cloning fresh llama.cpp repository (shallow clone)...${NC}"
-            rm -rf "$INSTALL_DIR"
-            git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$INSTALL_DIR" || git clone --depth 1 https://github.com/ggerganov/llama.cpp.git "$INSTALL_DIR"
+    # Option 2: Vulkan GPU build
+    if [ "$ENGINE_CHOICE" -eq 2 ]; then
+        if compile_from_source 1; then
+            BUILD_SUCCESS=1
         else
-            echo -e "${BLUE}[*] Updating existing llama.cpp repository...${NC}"
-            cd "$INSTALL_DIR"
-            git fetch --depth 1 origin 2>/dev/null || true
-            git reset --hard origin/master 2>/dev/null || git reset --hard origin/main 2>/dev/null || true
-        fi
-
-        cd "$INSTALL_DIR"
-        BUILD_CORES=$(( CORES > 4 ? 4 : (CORES > 1 ? CORES : 1) ))
-        echo -e "\n${YELLOW}[3/4] Configuring compiler for ${SOC_NAME} (using ${BUILD_CORES} RAM-safe jobs)...${NC}"
-
-        echo -e "\n${YELLOW}[4/4] Building llama-server...${NC}"
-        rm -rf "$BUILD_DIR"
-        mkdir -p "$BUILD_DIR"
-
-        CMAKE_GEN=""
-        if command -v ninja >/dev/null 2>&1; then
-            CMAKE_GEN="-G Ninja"
-        fi
-
-        if [ "$ENGINE_CHOICE" -eq 2 ] && [ "$HAS_VULKAN" -eq 1 ]; then
-            echo -e "${BLUE}[*] Configuring with Vulkan GPU acceleration...${NC}"
-            if cmake -B build $CMAKE_GEN -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF -DGGML_OPENMP=OFF; then
-                echo -e "${BLUE}[*] Compiling llama-server with Vulkan GPU support (${BUILD_CORES} parallel jobs)...${NC}"
-                if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
-                    FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
-                    if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
-                        mkdir -p "$BUILD_DIR/bin"
-                        cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
-                        chmod +x "$BUILD_DIR/bin/llama-server"
-                        SERVER_BIN="$BUILD_DIR/bin/llama-server"
-                        echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
-                        BUILD_SUCCESS=1
-                    fi
-                fi
-            fi
-        fi
-
-        # If Vulkan failed or if CPU was chosen
-        if [ "$BUILD_SUCCESS" -ne 1 ]; then
-            if [ "$ENGINE_CHOICE" -eq 2 ]; then
-                echo -e "${YELLOW}[!] Vulkan GPU source build encountered driver issues. Trying Optimized ARM CPU build...${NC}"
-                rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
-            fi
-            echo -e "${BLUE}[*] Configuring Optimized ARM CPU build...${NC}"
-            if cmake -B build $CMAKE_GEN -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_SERVER=ON -DGGML_BUILD_TESTS=OFF -DLLAMA_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF -DGGML_OPENMP=OFF; then
-                echo -e "${BLUE}[*] Compiling llama-server for ARM CPU (${BUILD_CORES} parallel jobs)...${NC}"
-                if cmake --build build --target llama-server -j"$BUILD_CORES" || cmake --build build --target server -j"$BUILD_CORES" || cmake --build build -j"$BUILD_CORES"; then
-                    FOUND_BIN=$(find "$BUILD_DIR" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
-                    if [ -n "$FOUND_BIN" ] && [ -f "$FOUND_BIN" ]; then
-                        mkdir -p "$BUILD_DIR/bin"
-                        cp -f "$FOUND_BIN" "$BUILD_DIR/bin/llama-server"
-                        chmod +x "$BUILD_DIR/bin/llama-server"
-                        SERVER_BIN="$BUILD_DIR/bin/llama-server"
-                        echo -e "${GREEN}[✓] Compiled successfully for ARM CPU!${NC}"
-                        BUILD_SUCCESS=1
-                    fi
-                fi
-            fi
-        fi
-
-        # If source build failed, automatically install pre-compiled engine as seamless recovery
-        if [ "$BUILD_SUCCESS" -ne 1 ]; then
-            echo -e "${YELLOW}[!] Source compilation was incomplete on this Android ROM.${NC}"
-            echo -e "${YELLOW}[*] Seamlessly recovering with verified pre-compiled engine...${NC}"
+            echo -e "${YELLOW}[!] Source compilation was incomplete. Recovering with verified pre-compiled engine...${NC}"
             if install_precompiled_engine; then
                 BUILD_SUCCESS=1
             fi
         fi
     fi
 
-    # Final safety net
-    if [ "$BUILD_SUCCESS" -ne 1 ] && [ -z "$SERVER_BIN" ]; then
-        install_precompiled_engine || true
+    # Option 3: Turbo CPU build
+    if [ "$ENGINE_CHOICE" -eq 3 ]; then
+        if compile_from_source 0; then
+            BUILD_SUCCESS=1
+        else
+            echo -e "${YELLOW}[!] Source compilation was incomplete. Recovering with verified pre-compiled engine...${NC}"
+            if install_precompiled_engine; then
+                BUILD_SUCCESS=1
+            fi
+        fi
     fi
 
-    # Verify binary presence
+    # Ultimate Safety Net: Check all possible locations
     if [ -z "$SERVER_BIN" ] || [ ! -x "$SERVER_BIN" ]; then
-        FOUND_ANY=$(find "$INSTALL_DIR" "$PREFIX/bin" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
+        SERVER_BIN=$(find_existing_server || echo "")
+    fi
+
+    if [ -z "$SERVER_BIN" ] || [ ! -x "$SERVER_BIN" ]; then
+        FOUND_ANY=$(find "$INSTALL_DIR" "$HOME" "$PREFIX/bin" -type f \( -name "llama-server" -o -name "server" \) 2>/dev/null | head -n 1)
         if [ -n "$FOUND_ANY" ]; then
-            SERVER_BIN="$FOUND_ANY"
-            chmod +x "$SERVER_BIN"
+            mkdir -p "$BUILD_DIR/bin"
+            cp -f "$FOUND_ANY" "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
+            chmod +x "$BUILD_DIR/bin/llama-server"
+            SERVER_BIN="$BUILD_DIR/bin/llama-server"
         else
             echo -e "${RED}[ERROR] Could not setup llama-server executable.${NC}"
             echo -e "${YELLOW}Tip: Run 'pkg install -y llama-cpp' in Termux to install directly.${NC}"
