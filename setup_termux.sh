@@ -73,10 +73,11 @@ if [ -n "$SERVER_BIN" ]; then
 fi
 
 if [ "$SKIP_BUILD" != "1" ]; then
-    echo -e "\n${YELLOW}[1/4] Installing necessary packages, OpenMP, and GPU build tools...${NC}"
-    pkg update -y
-    pkg install -y git cmake clang make termux-tools python iproute2 curl openmp
-    # Install Vulkan libraries for mobile GPU acceleration
+    echo -e "\n${YELLOW}[1/4] Installing necessary packages and build tools...${NC}"
+    pkg update -y 2>/dev/null || true
+    pkg install -y git cmake clang make termux-tools python iproute2 curl
+    # Optionally install OpenMP (libomp) and Vulkan libraries if available in Termux
+    pkg install -y libomp 2>/dev/null || true
     pkg install -y vulkan-headers vulkan-loader-android 2>/dev/null || true
 
     echo -e "\n${YELLOW}[2/4] Cloning / Updating llama.cpp repository...${NC}"
@@ -120,8 +121,8 @@ if [ "$SKIP_BUILD" != "1" ]; then
 
     BUILD_SUCCESS=0
     if [ "$ACCEL_CHOICE" -eq 1 ]; then
-        echo -e "${BLUE}[*] Attempting Vulkan GPU + OpenMP build...${NC}"
-        if cmake -B build -DGGML_VULKAN=ON -DGGML_RPC=ON -DGGML_OPENMP=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS 2>/dev/null; then
+        echo -e "${BLUE}[*] Attempting Vulkan Mobile GPU build...${NC}"
+        if cmake -B build -DGGML_VULKAN=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS 2>/dev/null; then
             if cmake --build build --target llama-server rpc-server -j"$CORES" 2>/dev/null || cmake --build build -j"$CORES" 2>/dev/null; then
                 if [ -f "$BUILD_DIR/bin/llama-server" ] || [ -f "$BUILD_DIR/bin/server" ]; then
                     echo -e "${GREEN}[✓] Compiled successfully with Vulkan Mobile GPU acceleration!${NC}"
@@ -137,8 +138,8 @@ if [ "$SKIP_BUILD" != "1" ]; then
     fi
 
     if [ "$BUILD_SUCCESS" -ne 1 ]; then
-        echo -e "${BLUE}[*] Building Turbo ARM CPU (NEON + Hardware Vector + OpenMP)...${NC}"
-        cmake -B build -DGGML_RPC=ON -DGGML_OPENMP=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS
+        echo -e "${BLUE}[*] Building Turbo ARM CPU (NEON + Hardware Vector)...${NC}"
+        cmake -B build -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release $ARCH_FLAGS
         cmake --build build --target llama-server rpc-server -j"$CORES" 2>/dev/null || cmake --build build -j"$CORES"
     fi
 
