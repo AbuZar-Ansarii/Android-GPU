@@ -12,6 +12,7 @@ import json
 import time
 import socket
 import signal
+import ssl
 import shutil
 import urllib.request
 import urllib.error
@@ -357,7 +358,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         cmd,
         stdout=log_file,
         stderr=log_file,
-        env=get_binary_env(binary_path),
+        env=get_binary_env(binary),
         preexec_fn=os.setsid if hasattr(os, "setsid") else None
     )
 
@@ -392,29 +393,46 @@ def scan_models(include_downloads=True):
         for f in os.listdir(MODELS_DIR):
             if f.endswith(".gguf"):
                 path = os.path.join(MODELS_DIR, f)
-                size_mb = os.path.getsize(path) / (1024 * 1024)
-                size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
-                results.append({
-                    "name": f,
-                    "path": path,
-                    "size": size_str,
-                    "location": "internal"
-                })
+                try:
+                    size_bytes = os.path.getsize(path)
+                    # Filter out empty or incomplete files (< 1MB)
+                    if size_bytes < 1024 * 1024:
+                        continue
+                    size_mb = size_bytes / (1024 * 1024)
+                    size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
+                    results.append({
+                        "name": f,
+                        "path": path,
+                        "size": size_str,
+                        "location": "internal"
+                    })
+                except Exception:
+                    pass
 
-    # 2. Scan Phone Downloads
+    # 2. Scan Phone Downloads & Storage
     if include_downloads:
         dl_dirs = [
             "/sdcard/Download",
+            "/sdcard/Downloads",
             "/storage/emulated/0/Download",
-            os.path.expanduser("~/storage/downloads")
+            "/storage/emulated/0/Downloads",
+            os.path.expanduser("~/storage/downloads"),
+            os.path.expanduser("~/storage/shared/Download")
         ]
+        seen_paths = set(m["path"] for m in results)
         for d in dl_dirs:
             if os.path.exists(d):
                 try:
                     for f in os.listdir(d):
                         if f.endswith(".gguf"):
                             path = os.path.join(d, f)
-                            size_mb = os.path.getsize(path) / (1024 * 1024)
+                            if path in seen_paths:
+                                continue
+                            size_bytes = os.path.getsize(path)
+                            if size_bytes < 1024 * 1024:
+                                continue
+                            seen_paths.add(path)
+                            size_mb = size_bytes / (1024 * 1024)
                             size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
                             results.append({
                                 "name": f,
@@ -434,8 +452,9 @@ def download_worker(url, dest_path):
         download_state["active"] = True
         download_state["percent"] = 0.0
 
-        req = urllib.request.Request(url, headers={"User-Agent": "PhoneAsGPU/1.0"})
-        with urllib.request.urlopen(req) as resp, open(dest_path, "wb") as f:
+        ctx = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+        with urllib.request.urlopen(req, context=ctx) as resp, open(dest_path, "wb") as f:
             total_length = resp.headers.get("Content-Length")
             total_size = int(total_length) if total_length else 0
             downloaded = 0
@@ -456,8 +475,20 @@ def download_worker(url, dest_path):
                     download_state["speed"] = f"{speed_mb:.1f} MB/s"
 
         download_state["percent"] = 100.0
+        # Automatically load downloaded weights if no model is currently running
+        if llama_process is None or llama_process.poll() is not None:
+            print(f"[*] Auto-mounting freshly downloaded weights: {os.path.basename(dest_path)}")
+            try:
+                start_llama_server(dest_path)
+            except Exception as e:
+                print(f"[!] Auto-mount failed: {e}")
     except Exception as e:
         print(f"[ERROR] Download failed: {e}")
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
     finally:
         download_state["active"] = False
 
@@ -683,6 +714,16 @@ if __name__ == "__main__":
     elif features.get("flash_attn"):
         print(f"[*] Hardware Engine    : ARM NEON + Flash Attention + 8-bit KV")
     print("=" * 60)
+
+    # Auto-load existing model at startup if available
+    available_models = scan_models(include_downloads=True)
+    if available_models and binary:
+        preferred = available_models[0]["path"]
+        print(f"[*] Auto-loading model on startup: {os.path.basename(preferred)} ...")
+        try:
+            start_llama_server(preferred)
+        except Exception as e:
+            print(f"[!] Startup auto-load failed: {e}")
 
     server = HTTPServer(("0.0.0.0", PORT), RequestHandler)
     try:

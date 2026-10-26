@@ -556,8 +556,48 @@ if [ "$EXISTING_MODELS" -eq 0 ]; then
 
     if [ -n "$MODEL_URL" ]; then
         echo -e "\n${BLUE}[*] Downloading $MODEL_FILE...${NC}"
-        curl -L -# -o "$MODELS_DIR/$MODEL_FILE" "$MODEL_URL"
-        echo -e "${GREEN}[✓] Download complete: $MODELS_DIR/$MODEL_FILE${NC}"
+        curl -k -L --retry 3 --connect-timeout 20 -# -o "$MODELS_DIR/$MODEL_FILE" "$MODEL_URL" || true
+        
+        # Verify file exists and is greater than 10MB
+        FILE_SIZE=0
+        if [ -f "$MODELS_DIR/$MODEL_FILE" ]; then
+            FILE_SIZE=$(wc -c < "$MODELS_DIR/$MODEL_FILE" 2>/dev/null || echo 0)
+        fi
+        
+        # Fallback to Python streaming with SSL bypass if curl failed or produced truncated file
+        if [ "$FILE_SIZE" -lt 10000000 ]; then
+            echo -e "${YELLOW}[*] Retrying download using Python with streaming & SSL bypass...${NC}"
+            rm -f "$MODELS_DIR/$MODEL_FILE"
+            python3 - << PY_DL
+import urllib.request, ssl, shutil, sys
+url = "$MODEL_URL"
+dest = "$MODELS_DIR/$MODEL_FILE"
+ctx = ssl._create_unverified_context()
+req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+try:
+    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp, open(dest, "wb") as f:
+        total = int(resp.headers.get("content-length", 0))
+        downloaded = 0
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            downloaded += len(chunk)
+            if total > 0 and downloaded % (1024 * 1024 * 10) < 65536:
+                pct = int((downloaded / total) * 100)
+                print(f"[*] Progress: {pct}% ({downloaded // (1024*1024)}MB / {total // (1024*1024)}MB)")
+except Exception as e:
+    print(f"[!] Download error: {e}")
+PY_DL
+        fi
+
+        if [ -f "$MODELS_DIR/$MODEL_FILE" ] && [ -s "$MODELS_DIR/$MODEL_FILE" ]; then
+            echo -e "${GREEN}[✓] Download complete: $MODELS_DIR/$MODEL_FILE${NC}"
+        else
+            echo -e "${YELLOW}[!] Download was incomplete. You can download or mount weights from the Web UI.${NC}"
+            rm -f "$MODELS_DIR/$MODEL_FILE"
+        fi
     fi
 fi
 
