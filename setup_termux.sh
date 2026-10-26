@@ -243,11 +243,21 @@ if not success:
 
 # Find llama-server anywhere inside dest_dir
 found = None
+lib_dir = os.path.join(dest_dir, "lib")
+os.makedirs(lib_dir, exist_ok=True)
+
 for root, dirs, files in os.walk(dest_dir):
     for f in files:
         if f.endswith(".so"):
+            src_so = os.path.join(root, f)
             try:
-                os.chmod(os.path.join(root, f), 0o755)
+                os.chmod(src_so, 0o755)
+                # Ensure all shared libraries sit in build_bin and dest_dir/lib
+                for target_d in (build_bin, lib_dir):
+                    dst = os.path.join(target_d, f)
+                    if src_so != dst:
+                        shutil.copy2(src_so, dst)
+                        os.chmod(dst, 0o755)
             except Exception:
                 pass
         if f in ("llama-server", "server"):

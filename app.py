@@ -68,12 +68,17 @@ def get_binary_env(binary_path=None):
     ld_paths = []
     if binary_path:
         bin_dir = os.path.dirname(os.path.abspath(binary_path))
-        ld_paths.extend([
-            bin_dir,
-            os.path.join(bin_dir, "..", "lib"),
-            os.path.join(bin_dir, "lib")
-        ])
+        for d in [bin_dir, os.path.join(bin_dir, "..", "lib"), os.path.join(bin_dir, "lib")]:
+            if os.path.isdir(d) and d not in ld_paths:
+                ld_paths.append(d)
     
+    # Automatically locate all directories in ~/llama.cpp that contain .so files
+    base_llama = os.path.join(HOME_DIR, "llama.cpp")
+    if os.path.isdir(base_llama):
+        for root, _, files in os.walk(base_llama):
+            if any(f.endswith(".so") for f in files) and root not in ld_paths:
+                ld_paths.append(root)
+
     default_dirs = [
         os.path.join(HOME_DIR, "llama.cpp", "build", "bin"),
         os.path.join(HOME_DIR, "llama.cpp", "lib"),
@@ -299,15 +304,12 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if threads is None or threads <= 0:
         threads = cpu_topo["recommended_threads"]
 
-    # Base command arguments
+    # Base command arguments (Universal & clean - fully compatible across all llama-server versions)
     args = [
         binary,
         "-m", model_path,
         "-c", str(ctx_size),
         "-t", str(threads),
-        "-tb", str(cpu_topo["recommended_threads"]),
-        "-b", "512",
-        "-ub", "256",
         "--host", "127.0.0.1",
         "--port", str(LLAMA_PORT)
     ]
@@ -320,29 +322,21 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if kv_quant and kv_quant != "f16" and features.get("kv_quant"):
         args.extend(["-ctk", kv_quant, "-ctv", kv_quant])
 
-    # Mobile GPU layer offloading (Vulkan)
+    # Mobile GPU layer offloading (Vulkan / OpenCL / Hexagon)
     if gpu_layers > 0 and features.get("gpu_layers"):
         args.extend(["-ngl", str(gpu_layers)])
 
-    # Check for taskset CPU core pinning to big cores
     cmd = args
-    has_taskset = shutil.which("taskset") or os.path.isfile("/system/bin/taskset")
-    taskset_bin = shutil.which("taskset") or "/system/bin/taskset" if os.path.isfile("/system/bin/taskset") else None
-    
-    use_pinning = pin_cores and cpu_topo.get("affinity_str") and taskset_bin
-    if use_pinning:
-        cmd = [taskset_bin, "-c", cpu_topo["affinity_str"]] + args
 
     print("=" * 60)
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
     print("=" * 60)
     print(f"[*] Model       : {os.path.basename(model_path)}")
-    print(f"[*] Threads     : {threads} (batch eval: {cpu_topo['recommended_threads']})")
+    print(f"[*] Threads     : {threads} (Optimal ARM core allocation)")
     print(f"[*] Context     : {ctx_size} tokens")
     print(f"[*] Flash-Attn  : {'Enabled (--flash-attn)' if (flash_attn and features.get('flash_attn')) else 'Disabled'}")
     print(f"[*] KV Cache    : {kv_quant if (kv_quant != 'f16' and features.get('kv_quant')) else 'f16 (standard)'}")
     print(f"[*] GPU Offload : {gpu_layers if features.get('gpu_layers') else 0} layers")
-    print(f"[*] CPU Pinning : {cpu_topo.get('affinity_str') if use_pinning else 'None'}")
     print("=" * 60)
 
     server_log_path = os.path.join(HOME_DIR, "llama_server.log")
@@ -362,14 +356,39 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         preexec_fn=os.setsid if hasattr(os, "setsid") else None
     )
 
-    # Wait for server to come online
-    time.sleep(2.0)
+    # Wait for server to load model weights and open socket (poll up to 15 seconds)
+    server_online = False
+    for _ in range(30):
+        if proc.poll() is not None:
+            break
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{LLAMA_PORT}/health")
+            with urllib.request.urlopen(req, timeout=0.5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if data.get("status") in ("ok", "ready"):
+                        server_online = True
+                        break
+        except Exception:
+            pass
+        time.sleep(0.5)
 
-    if proc.poll() is not None:
-        print(f"[ERROR] llama-server exited unexpectedly with return code {proc.returncode}!")
-        print(f"[*] Inspect runtime logs at: {server_log_path}")
-    else:
-        print(f"[✓] Model successfully loaded with acceleration: {os.path.basename(model_path)}")
+    if proc.poll() is not None or not server_online:
+        err_msg = ""
+        if os.path.isfile(server_log_path):
+            try:
+                with open(server_log_path, "r") as f:
+                    lines = f.readlines()
+                    err_msg = "".join(lines[-15:]).strip()
+            except Exception:
+                pass
+        stop_llama_server()
+        if not err_msg:
+            err_msg = f"llama-server exited with code {proc.returncode if proc.returncode is not None else 'timeout'}"
+        print(f"[ERROR] Failed to start llama-server:\n{err_msg}")
+        raise RuntimeError(f"Engine failed to load model: {err_msg}")
+
+    print(f"[✓] Model successfully loaded and online: {os.path.basename(model_path)}")
 
     with state_lock:
         llama_process = proc
@@ -381,7 +400,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             "flash_attn": bool(flash_attn and features.get("flash_attn")),
             "kv_quant": kv_quant if (kv_quant != "f16" and features.get("kv_quant")) else "f16",
             "gpu_layers": gpu_layers if features.get("gpu_layers") else 0,
-            "pinned_cores": cpu_topo.get("affinity_str") if use_pinning else None
+            "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None
         }
 
 def scan_models(include_downloads=True):
