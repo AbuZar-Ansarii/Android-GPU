@@ -156,12 +156,15 @@ def get_binary_features(binary_path):
         res = subprocess.run([binary_path, "--help"], capture_output=True, text=True, timeout=5, env=env)
         help_text = res.stdout + res.stderr
         if "--flash-attn" in help_text or "-fa" in help_text:
-            features["flash_attn"] = True
+            if any(term in help_text for term in ["[on|off|auto]", "<on|off|auto>", "set Flash Attention use", "LLAMA_ARG_FLASH_ATTN"]):
+                features["flash_attn"] = "value"
+            else:
+                features["flash_attn"] = "flag"
         if "--cache-type-k" in help_text or "-ctk" in help_text:
             features["kv_quant"] = True
         if "--n-gpu-layers" in help_text or "-ngl" in help_text:
             features["gpu_layers"] = True
-        if "vulkan" in help_text.lower() or "ggml_vulkan" in help_text.lower() or "opencl" in help_text.lower():
+        if any(term in help_text.lower() for term in ["vulkan", "ggml_vulkan", "opencl", "qualcomm", "snapdragon", "qnn"]):
             features["vulkan"] = True
     except Exception:
         pass
@@ -278,6 +281,24 @@ def stop_llama_server():
             active_runtime_config = {}
             print("[✓] Model unloaded. Memory freed.")
 
+def _poll_server_health(proc, timeout_sec=15):
+    """Poll llama-server /health endpoint until it reports ready or process exits."""
+    iterations = int(timeout_sec * 2)
+    for _ in range(iterations):
+        if proc.poll() is not None:
+            return False
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{LLAMA_PORT}/health")
+            with urllib.request.urlopen(req, timeout=0.5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if data.get("status") in ("ok", "ready"):
+                        return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
 def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="q8_0", gpu_layers=0, pin_cores=True):
     """
     Start llama-server with hardware acceleration flags:
@@ -304,8 +325,8 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if threads is None or threads <= 0:
         threads = cpu_topo["recommended_threads"]
 
-    # Base command arguments (Universal & clean - fully compatible across all llama-server versions)
-    args = [
+    # Base universal command arguments (Universal & clean - fully compatible across all llama-server versions)
+    base_args = [
         binary,
         "-m", model_path,
         "-c", str(ctx_size),
@@ -314,19 +335,23 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         "--port", str(LLAMA_PORT)
     ]
 
+    # Build accelerated command
+    accel_args = list(base_args)
+
     # Flash Attention (reduces memory bandwidth and attention overhead)
-    if flash_attn and features.get("flash_attn"):
-        args.append("--flash-attn")
+    fa_style = features.get("flash_attn")
+    if fa_style == "value":
+        accel_args.extend(["--flash-attn", "on" if flash_attn else "off"])
+    elif fa_style == "flag" and flash_attn:
+        accel_args.append("--flash-attn")
 
     # KV Cache Quantization (reduces memory bandwidth bottleneck by 50% for faster generation)
     if kv_quant and kv_quant != "f16" and features.get("kv_quant"):
-        args.extend(["-ctk", kv_quant, "-ctv", kv_quant])
+        accel_args.extend(["-ctk", kv_quant, "-ctv", kv_quant])
 
     # Mobile GPU layer offloading (Vulkan / OpenCL / Hexagon)
     if gpu_layers > 0 and features.get("gpu_layers"):
-        args.extend(["-ngl", str(gpu_layers)])
-
-    cmd = args
+        accel_args.extend(["-ngl", str(gpu_layers)])
 
     print("=" * 60)
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
@@ -334,46 +359,68 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print(f"[*] Model       : {os.path.basename(model_path)}")
     print(f"[*] Threads     : {threads} (Optimal ARM core allocation)")
     print(f"[*] Context     : {ctx_size} tokens")
-    print(f"[*] Flash-Attn  : {'Enabled (--flash-attn)' if (flash_attn and features.get('flash_attn')) else 'Disabled'}")
+    print(f"[*] Flash-Attn  : {'Enabled' if (flash_attn and fa_style) else 'Disabled'}")
     print(f"[*] KV Cache    : {kv_quant if (kv_quant != 'f16' and features.get('kv_quant')) else 'f16 (standard)'}")
     print(f"[*] GPU Offload : {gpu_layers if features.get('gpu_layers') else 0} layers")
     print("=" * 60)
 
     server_log_path = os.path.join(HOME_DIR, "llama_server.log")
+    env = get_binary_env(binary)
+    if flash_attn:
+        env["LLAMA_ARG_FLASH_ATTN"] = "on"
+
+    # Try 1: Launch with hardware acceleration
+    launch_success = False
+    proc = None
+    used_cmd = accel_args
+
     try:
-        log_file = open(server_log_path, "a")
-        log_file.write(f"\n--- Launching llama-server at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-        log_file.write(f"Command: {' '.join(cmd)}\n")
-        log_file.flush()
-    except Exception:
-        log_file = subprocess.DEVNULL
+        with open(server_log_path, "a") as log_file:
+            log_file.write(f"\n--- Launching llama-server at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            log_file.write(f"Command: {' '.join(accel_args)}\n")
+            log_file.flush()
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=log_file,
-        stderr=log_file,
-        env=get_binary_env(binary),
-        preexec_fn=os.setsid if hasattr(os, "setsid") else None
-    )
+        log_out = open(server_log_path, "a")
+        proc = subprocess.Popen(
+            accel_args,
+            stdout=log_out,
+            stderr=log_out,
+            env=env,
+            preexec_fn=os.setsid if hasattr(os, "setsid") else None
+        )
+        launch_success = _poll_server_health(proc, timeout_sec=15)
+    except Exception as e:
+        print(f"[!] Accelerated launch error: {e}")
 
-    # Wait for server to load model weights and open socket (poll up to 15 seconds)
-    server_online = False
-    for _ in range(30):
-        if proc.poll() is not None:
-            break
+    # Try 2: If acceleration flags failed, automatically fall back to universal baseline
+    if (not launch_success or (proc and proc.poll() is not None)) and accel_args != base_args:
+        print("[!] Accelerated startup failed. Automatically recovering with universal baseline...")
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+        used_cmd = base_args
         try:
-            req = urllib.request.Request(f"http://127.0.0.1:{LLAMA_PORT}/health")
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    if data.get("status") in ("ok", "ready"):
-                        server_online = True
-                        break
-        except Exception:
-            pass
-        time.sleep(0.5)
+            with open(server_log_path, "a") as log_file:
+                log_file.write(f"\n--- Fallback to Universal Baseline at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                log_file.write(f"Command: {' '.join(base_args)}\n")
+                log_file.flush()
 
-    if proc.poll() is not None or not server_online:
+            log_out = open(server_log_path, "a")
+            proc = subprocess.Popen(
+                base_args,
+                stdout=log_out,
+                stderr=log_out,
+                env=env,
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None
+            )
+            launch_success = _poll_server_health(proc, timeout_sec=15)
+        except Exception as e:
+            print(f"[!] Baseline launch error: {e}")
+
+    if not launch_success or proc is None or proc.poll() is not None:
         err_msg = ""
         if os.path.isfile(server_log_path):
             try:
@@ -384,7 +431,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
                 pass
         stop_llama_server()
         if not err_msg:
-            err_msg = f"llama-server exited with code {proc.returncode if proc.returncode is not None else 'timeout'}"
+            err_msg = f"llama-server exited with code {proc.returncode if proc and proc.returncode is not None else 'timeout'}"
         print(f"[ERROR] Failed to start llama-server:\n{err_msg}")
         raise RuntimeError(f"Engine failed to load model: {err_msg}")
 
@@ -394,12 +441,13 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         llama_process = proc
         current_model_path = model_path
         current_model_name = os.path.basename(model_path)
+        is_accel = (used_cmd == accel_args)
         active_runtime_config = {
             "threads": threads,
             "ctx_size": ctx_size,
-            "flash_attn": bool(flash_attn and features.get("flash_attn")),
-            "kv_quant": kv_quant if (kv_quant != "f16" and features.get("kv_quant")) else "f16",
-            "gpu_layers": gpu_layers if features.get("gpu_layers") else 0,
+            "flash_attn": bool(flash_attn and is_accel and fa_style),
+            "kv_quant": kv_quant if (kv_quant != "f16" and is_accel and features.get("kv_quant")) else "f16",
+            "gpu_layers": gpu_layers if (is_accel and features.get("gpu_layers")) else 0,
             "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None
         }
 
