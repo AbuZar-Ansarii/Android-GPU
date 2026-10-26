@@ -2219,14 +2219,29 @@
       let tokenCount = 0;
 
       try {
+        const cleanMessages = [];
+        const hasSystem = chat.messages.some(m => m.role === 'system');
+        if (!hasSystem) {
+          cleanMessages.push({
+            role: 'system',
+            content: 'You are a helpful, smart AI assistant. Pay close attention to the user\'s statements and remember all details provided in this conversation.'
+          });
+        }
+        for (const m of chat.messages) {
+          cleanMessages.push({
+            role: m.role,
+            content: m.content
+          });
+        }
+
         const response = await fetch('/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: currentModel,
-            messages: chat.messages,
+            messages: cleanMessages,
             stream: true,
-            temperature: 0.7
+            temperature: 0.6
           }),
           signal: abortController.signal
         });
