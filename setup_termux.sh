@@ -7,11 +7,6 @@
 
 set -e
 
-# Reconnect standard input to interactive terminal if executed via pipe (e.g. curl ... | bash)
-if [ ! -t 0 ] && [ -e /dev/tty ]; then
-    exec </dev/tty
-fi
-
 # Terminal Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,8 +25,10 @@ echo -e "${CYAN}====================================================${NC}"
 REPO_DIR="$HOME/Android-GPU"
 if [ ! -f "app.py" ] || [ ! -d "web" ]; then
     echo -e "${YELLOW}[*] Preparing environment and cloning Android-GPU repository...${NC}"
-    pkg update -y
-    pkg install -y git
+    if ! command -v git >/dev/null 2>&1; then
+        pkg update -y 2>/dev/null || true
+        pkg install -y git
+    fi
     if [ ! -d "$REPO_DIR" ]; then
         git clone https://github.com/AbuZar-Ansarii/Android-GPU.git "$REPO_DIR"
     else

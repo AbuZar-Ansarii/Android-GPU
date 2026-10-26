@@ -23,6 +23,7 @@ Open the **Termux** app on your phone, paste this single command, and press **En
 ```bash
 curl -sL https://raw.githubusercontent.com/AbuZar-Ansarii/Android-GPU/main/setup_termux.sh | bash
 ```
+*(or via:* `bash -c "$(curl -fsSL https://raw.githubusercontent.com/AbuZar-Ansarii/Android-GPU/main/setup_termux.sh)"`*)*
 
 > **What this one command handles automatically:**
 > 1. Clones the Android-GPU repository.
