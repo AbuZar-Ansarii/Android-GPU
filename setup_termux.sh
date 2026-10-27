@@ -188,10 +188,11 @@ os.makedirs(build_bin, exist_ok=True)
 soc = os.environ.get("PHONE_SOC", "").lower()
 dev = os.environ.get("PHONE_DEV", "").lower()
 
-# Build URL list (Snapdragon hardware release first if Qualcomm detected, plus universal fallbacks)
+# Build URL list (Only modern Snapdragon chips with Hexagon HTP v73+ support dedicated QNN engine; older chips use universal ARM64)
 urls = []
-if any(k in soc or k in dev for k in ["snapdragon", "qualcomm", "qcom", "sm8", "sm7", "sm6", "sm4"]):
-    print("[*] Qualcomm Snapdragon chip detected: Using dedicated Snapdragon NPU/GPU engine")
+modern_snapdragons = ["sm8550", "sm8650", "sm8750", "sm8635", "sm7475", "sm7550", "8 gen 2", "8 gen 3", "8 elite", "8s gen 3"]
+if any(k in soc or k in dev for k in modern_snapdragons):
+    print("[*] Modern Qualcomm Snapdragon 8 Gen chip detected: Using dedicated Snapdragon NPU/GPU engine")
     urls.append("https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64-snapdragon.tar.gz")
 
 urls.extend([

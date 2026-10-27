@@ -1584,11 +1584,11 @@
             </div>
             <div class="accel-control-row">
               <span class="accel-control-label">Mobile GPU (Vulkan):</span>
-              <select id="accel-gpu-layers" class="accel-input-sm">
-                <option value="0">0 (CPU Only)</option>
+              <select id="accel-gpu-layers" class="accel-input-sm" onchange="this.dataset.userModified='1'">
+                <option value="0" selected>0 (CPU Only - Safe)</option>
                 <option value="16">16 Layers</option>
                 <option value="33">33 Layers</option>
-                <option value="99" selected>99 (Full GPU Offload)</option>
+                <option value="99">99 (Full GPU Offload)</option>
               </select>
             </div>
             <div class="accel-control-row">
@@ -1625,9 +1625,9 @@
 
         <!-- Modal Tabs -->
         <div class="modal-tabs">
-          <button class="modal-tab-btn active" onclick="switchModalTab('installed')">INSTALLED</button>
-          <button class="modal-tab-btn" onclick="switchModalTab('downloads')">📥 PHONE STORAGE</button>
-          <button class="modal-tab-btn" onclick="switchModalTab('presets')">🌐 PRESET MODELS</button>
+          <button class="modal-tab-btn active" data-tab="installed" onclick="switchModalTab('installed', this)">INSTALLED</button>
+          <button class="modal-tab-btn" data-tab="downloads" onclick="switchModalTab('downloads', this)">📥 PHONE STORAGE</button>
+          <button class="modal-tab-btn" data-tab="presets" onclick="switchModalTab('presets', this)">🌐 PRESET MODELS</button>
         </div>
 
         <!-- Tab 1: Installed Models -->
@@ -2065,13 +2065,20 @@
 
         if (data.features) {
           const telemEng = document.getElementById('telem-engine');
-          if (telemEng) {
-            if (data.features.vulkan) {
+          const gpuSelect = document.getElementById('accel-gpu-layers');
+          if (data.features.vulkan) {
+            if (telemEng) {
               telemEng.innerText = 'Vulkan GPU';
               telemEng.style.color = '#10b981';
-            } else {
-              telemEng.innerText = 'Turbo ARM NEON';
+            }
+          } else {
+            if (telemEng) {
+              telemEng.innerText = 'Turbo ARM NEON (CPU)';
               telemEng.style.color = 'var(--crimson)';
+            }
+            // Auto-default GPU layers to 0 on devices without Vulkan acceleration
+            if (gpuSelect && !gpuSelect.dataset.userModified) {
+              gpuSelect.value = '0';
             }
           }
         }
@@ -2428,7 +2435,7 @@
             <div>
               ${isCurrent ? 
                 `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` : 
-                `<button class="btn btn-primary" onclick="loadModel('${m.path}')">LOAD</button>`
+                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this)">LOAD</button>`
               }
             </div>
           `;
@@ -2471,7 +2478,7 @@
             <div>
               ${isCurrent ? 
                 `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` : 
-                `<button class="btn btn-primary" onclick="loadModel('${m.path}')">LOAD & EXECUTE</button>`
+                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this)">LOAD & EXECUTE</button>`
               }
             </div>
           `;
@@ -2482,8 +2489,8 @@
       }
     }
 
-    async function loadModel(path) {
-      const btn = event?.target;
+    async function loadModel(path, btnEl) {
+      const btn = btnEl || (typeof event !== 'undefined' ? event?.target : null);
       if (btn) {
         btn.innerText = 'ACCELERATING...';
         btn.disabled = true;
@@ -2598,13 +2605,20 @@
             bar.style.width = `${data.percent}%`;
           } else {
             clearInterval(timer);
-            pctEl.innerText = '100% - MOUNTED';
-            bar.style.width = '100%';
-            setTimeout(() => {
-              progressBox.style.display = 'none';
-              switchModalTab('installed');
-              loadInstalledModels();
-            }, 1200);
+            if (data.error) {
+              pctEl.innerText = 'DOWNLOAD ERROR';
+              bar.style.width = '100%';
+              bar.style.background = 'var(--danger)';
+              alert('Download failed: ' + data.error);
+            } else {
+              pctEl.innerText = '100% - MOUNTED';
+              bar.style.width = '100%';
+              setTimeout(() => {
+                progressBox.style.display = 'none';
+                switchModalTab('installed');
+                loadInstalledModels();
+              }, 1200);
+            }
           }
         }, 1000);
       } catch (err) {
@@ -2647,21 +2661,43 @@
       document.getElementById('bridge-modal').classList.remove('open');
     }
 
-    function switchModalTab(tabId) {
+    function switchModalTab(tabId, btnEl) {
       document.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.modal-tab-body').forEach(b => b.classList.remove('active'));
 
-      event.target.classList.add('active');
-      document.getElementById(`modal-tab-${tabId}`).classList.add('active');
+      const activeBtn = btnEl || document.querySelector(`.modal-tab-btn[data-tab="${tabId}"]`);
+      if (activeBtn) activeBtn.classList.add('active');
+      const targetBody = document.getElementById(`modal-tab-${tabId}`);
+      if (targetBody) targetBody.classList.add('active');
 
       if (tabId === 'installed') loadInstalledModels();
       if (tabId === 'downloads') scanPhoneDownloads();
     }
 
     function copyText(text) {
-      navigator.clipboard.writeText(text).then(() => {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+          alert('Copied to clipboard: ' + text);
+        }).catch(() => fallbackCopyText(text));
+      } else {
+        fallbackCopyText(text);
+      }
+    }
+
+    function fallbackCopyText(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
         alert('Copied to clipboard: ' + text);
-      });
+      } catch (e) {
+        prompt('Copy text manually:', text);
+      }
+      document.body.removeChild(ta);
     }
 
     function escapeHtml(text) {
@@ -2679,12 +2715,33 @@
 
         header.querySelector('.copy-code-btn').onclick = () => {
           const code = pre.querySelector('code')?.innerText || pre.innerText;
-          navigator.clipboard.writeText(code).then(() => {
-            header.querySelector('.copy-code-btn').innerText = 'COPIED!';
-            setTimeout(() => header.querySelector('.copy-code-btn').innerText = 'COPY', 2000);
-          });
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(code).then(() => {
+              header.querySelector('.copy-code-btn').innerText = 'COPIED!';
+              setTimeout(() => header.querySelector('.copy-code-btn').innerText = 'COPY', 2000);
+            }).catch(() => fallbackCopyCode(code, header.querySelector('.copy-code-btn')));
+          } else {
+            fallbackCopyCode(code, header.querySelector('.copy-code-btn'));
+          }
         };
       });
+    }
+
+    function fallbackCopyCode(code, btnEl) {
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        if (btnEl) {
+          btnEl.innerText = 'COPIED!';
+          setTimeout(() => btnEl.innerText = 'COPY', 2000);
+        }
+      } catch (e) {}
+      document.body.removeChild(ta);
     }
   </script>
 </body>

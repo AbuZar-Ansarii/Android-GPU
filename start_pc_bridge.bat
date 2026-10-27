@@ -31,8 +31,8 @@ echo.
 echo [*] Forwarding Web UI & OpenAI API port (8080) over USB...
 "%ADB_PATH%" forward tcp:8080 tcp:8080
 
-echo [*] Forwarding llama.cpp RPC port (50052) over USB...
-"%ADB_PATH%" forward tcp:50052 tcp:50052
+echo [*] Forwarding llama.cpp engine port (50053) over USB...
+"%ADB_PATH%" forward tcp:50053 tcp:50053
 
 if %ERRORLEVEL% EQU 0 (
     echo.

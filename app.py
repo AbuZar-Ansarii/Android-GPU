@@ -35,6 +35,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 state_lock = threading.Lock()
 current_model_path = None
 current_model_name = None
+current_llama_port = LLAMA_PORT
 llama_process = None
 active_runtime_config = {}
 
@@ -42,7 +43,8 @@ download_state = {
     "active": False,
     "model": "",
     "percent": 0.0,
-    "speed": ""
+    "speed": "",
+    "error": None
 }
 
 _binary_features_cache = {}
@@ -261,39 +263,110 @@ def get_hardware_telemetry():
         pass
     return telemetry
 
+def kill_all_llama_processes():
+    """
+    Forcefully terminate any existing llama-server or server instances,
+    including zombie processes from previous crashes, unmanaged process groups,
+    or earlier Termux sessions.
+    """
+    global llama_process
+    # 1. Terminate tracked process if alive
+    if llama_process is not None:
+        try:
+            pid = llama_process.pid
+            if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except Exception:
+                    llama_process.kill()
+            else:
+                llama_process.kill()
+            llama_process.wait(timeout=1.5)
+        except Exception:
+            pass
+        llama_process = None
+
+    # 2. System-level cleanup for untracked / orphaned processes on Termux/Linux
+    if sys.platform != "win32":
+        for cmd in [
+            ["pkill", "-9", "-f", "llama-server"],
+            ["pkill", "-9", "-x", "llama-server"],
+            ["pkill", "-9", "-f", "server"]
+        ]:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=1.5)
+            except Exception:
+                pass
+    else:
+        try:
+            subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe"], capture_output=True, timeout=1.5)
+        except Exception:
+            pass
+
+    # 3. Allow sockets to leave TIME_WAIT
+    time.sleep(0.25)
+
+def find_free_port(start_port=50053, max_attempts=25):
+    """
+    Find a guaranteed bindable TCP port on localhost, starting with start_port.
+    Prevents 'couldn't bind HTTP server socket' crashes when ports are locked.
+    """
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+    
+    # Fallback: Let kernel assign an ephemeral port
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+    except Exception:
+        return start_port
+
 def stop_llama_server():
-    """Stop the running llama-server process to free all RAM."""
+    """Stop the running llama-server process and purge any orphan instances to free all RAM."""
     global llama_process, current_model_path, current_model_name, active_runtime_config
     with state_lock:
-        if llama_process is not None:
-            print("[*] Unloading model and stopping llama-server...")
-            try:
-                llama_process.terminate()
-                llama_process.wait(timeout=3)
-            except Exception:
-                try:
-                    llama_process.kill()
-                except Exception:
-                    pass
-            llama_process = None
-            current_model_path = None
-            current_model_name = None
-            active_runtime_config = {}
-            print("[✓] Model unloaded. Memory freed.")
+        print("[*] Unloading model and stopping llama-server...")
+        kill_all_llama_processes()
+        llama_process = None
+        current_model_path = None
+        current_model_name = None
+        active_runtime_config = {}
+        print("[✓] Model unloaded. Memory freed.")
 
-def _poll_server_health(proc, timeout_sec=15):
-    """Poll llama-server /health endpoint until it reports ready or process exits."""
+def _poll_server_health(proc, timeout_sec=35, port=None):
+    """
+    Poll llama-server /health endpoint until it reports ready or process exits.
+    Handles HTTP 503 (loading model) gracefully so slow storage devices don't fail prematurely.
+    """
+    if port is None:
+        port = current_llama_port
     iterations = int(timeout_sec * 2)
     for _ in range(iterations):
         if proc.poll() is not None:
             return False
         try:
-            req = urllib.request.Request(f"http://127.0.0.1:{LLAMA_PORT}/health")
-            with urllib.request.urlopen(req, timeout=0.5) as resp:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     if data.get("status") in ("ok", "ready"):
                         return True
+        except urllib.error.HTTPError as he:
+            # During model loading, llama-server responds with HTTP 503: {"status": "loading model"}
+            # This confirms the HTTP socket bound successfully and the server is actively reading weights!
+            try:
+                body = json.loads(he.read().decode("utf-8"))
+                if body.get("status") in ("ok", "ready"):
+                    return True
+            except Exception:
+                pass
         except Exception:
             pass
         time.sleep(0.5)
@@ -308,7 +381,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     - Mobile GPU offload via Vulkan (if compiled with Vulkan support)
     - Optimized batch & micro-batch sizes for mobile CPU caches
     """
-    global llama_process, current_model_path, current_model_name, active_runtime_config
+    global llama_process, current_model_path, current_model_name, current_llama_port, active_runtime_config
 
     stop_llama_server()
 
@@ -325,14 +398,18 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if threads is None or threads <= 0:
         threads = cpu_topo["recommended_threads"]
 
-    # Base universal command arguments (Universal & clean - fully compatible across all llama-server versions)
+    # Acquire guaranteed free port
+    active_port = find_free_port(LLAMA_PORT)
+    current_llama_port = active_port
+
+    # Base universal command arguments
     base_args = [
         binary,
         "-m", model_path,
         "-c", str(ctx_size),
         "-t", str(threads),
         "--host", "127.0.0.1",
-        "--port", str(LLAMA_PORT)
+        "--port", str(active_port)
     ]
 
     # Build accelerated command
@@ -357,6 +434,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
     print("=" * 60)
     print(f"[*] Model       : {os.path.basename(model_path)}")
+    print(f"[*] Port        : {active_port}")
     print(f"[*] Threads     : {threads} (Optimal ARM core allocation)")
     print(f"[*] Context     : {ctx_size} tokens")
     print(f"[*] Flash-Attn  : {'Enabled' if (flash_attn and fa_style) else 'Disabled'}")
@@ -369,7 +447,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if flash_attn:
         env["LLAMA_ARG_FLASH_ATTN"] = "on"
 
-    # Try 1: Launch with hardware acceleration
+    # Try 1: Launch with requested acceleration flags
     launch_success = False
     proc = None
     used_cmd = accel_args
@@ -388,35 +466,40 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             env=env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None
         )
-        launch_success = _poll_server_health(proc, timeout_sec=15)
+        launch_success = _poll_server_health(proc, timeout_sec=35, port=active_port)
     except Exception as e:
         print(f"[!] Accelerated launch error: {e}")
 
-    # Try 2: If acceleration flags failed, automatically fall back to universal baseline
+    # Try 2: If acceleration flags failed, forcefully terminate Try 1 and fall back to universal baseline
     if (not launch_success or (proc and proc.poll() is not None)) and accel_args != base_args:
-        print("[!] Accelerated startup failed. Automatically recovering with universal baseline...")
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except Exception:
-                pass
-        used_cmd = base_args
+        print("[!] Accelerated startup failed or timed out. Purging orphan processes and recovering with universal baseline...")
+        kill_all_llama_processes()
+        
+        # Verify fresh bindable port for baseline fallback
+        fallback_port = find_free_port(active_port)
+        current_llama_port = fallback_port
+
+        base_cmd = list(base_args)
+        if "--port" in base_cmd:
+            port_idx = base_cmd.index("--port")
+            base_cmd[port_idx + 1] = str(fallback_port)
+
+        used_cmd = base_cmd
         try:
             with open(server_log_path, "a") as log_file:
                 log_file.write(f"\n--- Fallback to Universal Baseline at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-                log_file.write(f"Command: {' '.join(base_args)}\n")
+                log_file.write(f"Command: {' '.join(base_cmd)}\n")
                 log_file.flush()
 
             log_out = open(server_log_path, "a")
             proc = subprocess.Popen(
-                base_args,
+                base_cmd,
                 stdout=log_out,
                 stderr=log_out,
                 env=env,
                 preexec_fn=os.setsid if hasattr(os, "setsid") else None
             )
-            launch_success = _poll_server_health(proc, timeout_sec=15)
+            launch_success = _poll_server_health(proc, timeout_sec=35, port=fallback_port)
         except Exception as e:
             print(f"[!] Baseline launch error: {e}")
 
@@ -445,6 +528,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         active_runtime_config = {
             "threads": threads,
             "ctx_size": ctx_size,
+            "port": current_llama_port,
             "flash_attn": bool(flash_attn and is_accel and fa_style),
             "kv_quant": kv_quant if (kv_quant != "f16" and is_accel and features.get("kv_quant")) else "f16",
             "gpu_layers": gpu_layers if (is_accel and features.get("gpu_layers")) else 0,
@@ -454,17 +538,22 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
 def scan_models(include_downloads=True):
     """Scan ~/models and Android download directories for GGUF files."""
     results = []
+    seen_real_paths = set()
     
     # 1. Scan internal ~/models
     if os.path.exists(MODELS_DIR):
         for f in os.listdir(MODELS_DIR):
-            if f.endswith(".gguf"):
+            if f.lower().endswith(".gguf"):
                 path = os.path.join(MODELS_DIR, f)
                 try:
+                    real = os.path.realpath(path)
+                    if real in seen_real_paths:
+                        continue
                     size_bytes = os.path.getsize(path)
                     # Filter out empty or incomplete files (< 1MB)
                     if size_bytes < 1024 * 1024:
                         continue
+                    seen_real_paths.add(real)
                     size_mb = size_bytes / (1024 * 1024)
                     size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
                     results.append({
@@ -476,7 +565,7 @@ def scan_models(include_downloads=True):
                 except Exception:
                     pass
 
-    # 2. Scan Phone Downloads & Storage
+    # 2. Scan Phone Downloads & Storage (deduplicating symlinked paths)
     if include_downloads:
         dl_dirs = [
             "/sdcard/Download",
@@ -486,19 +575,19 @@ def scan_models(include_downloads=True):
             os.path.expanduser("~/storage/downloads"),
             os.path.expanduser("~/storage/shared/Download")
         ]
-        seen_paths = set(m["path"] for m in results)
         for d in dl_dirs:
             if os.path.exists(d):
                 try:
                     for f in os.listdir(d):
-                        if f.endswith(".gguf"):
+                        if f.lower().endswith(".gguf"):
                             path = os.path.join(d, f)
-                            if path in seen_paths:
+                            real = os.path.realpath(path)
+                            if real in seen_real_paths:
                                 continue
                             size_bytes = os.path.getsize(path)
                             if size_bytes < 1024 * 1024:
                                 continue
-                            seen_paths.add(path)
+                            seen_real_paths.add(real)
                             size_mb = size_bytes / (1024 * 1024)
                             size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
                             results.append({
@@ -513,11 +602,13 @@ def scan_models(include_downloads=True):
     return results
 
 def download_worker(url, dest_path):
-    """Download model in background thread with progress."""
+    """Download model in background thread with progress and error tracking."""
     global download_state
     try:
         download_state["active"] = True
+        download_state["model"] = os.path.basename(dest_path)
         download_state["percent"] = 0.0
+        download_state["error"] = None
 
         ctx = ssl._create_unverified_context()
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
@@ -551,6 +642,7 @@ def download_worker(url, dest_path):
                 print(f"[!] Auto-mount failed: {e}")
     except Exception as e:
         print(f"[ERROR] Download failed: {e}")
+        download_state["error"] = str(e)
         if os.path.exists(dest_path):
             try:
                 os.remove(dest_path)
@@ -713,7 +805,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                llama_url = f"http://127.0.0.1:{LLAMA_PORT}{path}"
+                llama_url = f"http://127.0.0.1:{current_llama_port}{path}"
                 req = urllib.request.Request(
                     llama_url,
                     data=body,
@@ -729,7 +821,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             self.send_header(k, v)
                             if "text/event-stream" in v:
                                 is_sse = True
-                        elif kl in ("cache-control", "x-accel-buffering"):
+                        elif kl in ("cache-control", "x-accel-buffering", "content-length"):
                             self.send_header(k, v)
                     
                     if is_sse:
@@ -755,8 +847,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                                 break
                             self.wfile.write(chunk)
                             self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                # Client disconnected or aborted stream (e.g. user tapped Stop)
+                pass
             except Exception as e:
-                self.send_json(502, {"error": f"Llama-server communication failed: {str(e)}"})
+                try:
+                    self.send_json(502, {"error": f"Llama-server communication failed: {str(e)}"})
+                except Exception:
+                    pass
             return
 
         self.send_error(404, "Not Found")
@@ -768,6 +866,9 @@ def cleanup(*args):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
+
+    # Forcefully clean up any stale or orphaned llama-server processes on startup
+    kill_all_llama_processes()
 
     ip = get_local_ip()
     cpu_topo = detect_cpu_topology()
