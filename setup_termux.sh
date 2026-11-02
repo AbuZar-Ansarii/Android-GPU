@@ -144,9 +144,23 @@ SERVER_BIN=$(find_existing_server || echo "")
 SKIP_BUILD=0
 if [ -n "$SERVER_BIN" ] && [ -x "$SERVER_BIN" ]; then
     echo -e "${GREEN}[✓] llama-server is already installed and ready at: $SERVER_BIN${NC}"
-    read -r -p "Do you want to re-install/update the engine? (y/N): " REBUILD </dev/tty || REBUILD="N"
-    if [[ ! "$REBUILD" =~ ^[Yy]$ ]]; then
-        SKIP_BUILD=1
+    # Verify build version for Liquid AI LFM3 support (requires b11960+)
+    BIN_VER=$("$SERVER_BIN" --version 2>&1 | grep -o -E "[0-9]{4,5}" | head -n 1 || echo 0)
+    if [ "$BIN_VER" -gt 0 ] && [ "$BIN_VER" -lt 11960 ]; then
+        echo -e "${YELLOW}[!] Current installed engine (build $BIN_VER) is older than b11960 and CANNOT run Liquid AI LFM3 models!${NC}"
+        echo -e "${CYAN}Automatic update to latest engine (b12032+) is recommended.${NC}"
+        read -r -p "Upgrade engine now? (Y/n): " REBUILD </dev/tty || REBUILD="Y"
+        REBUILD=${REBUILD:-Y}
+        if [[ "$REBUILD" =~ ^[Yy]$ ]]; then
+            SKIP_BUILD=0
+        else
+            SKIP_BUILD=1
+        fi
+    else
+        read -r -p "Do you want to re-install/update the engine? (y/N): " REBUILD </dev/tty || REBUILD="N"
+        if [[ ! "$REBUILD" =~ ^[Yy]$ ]]; then
+            SKIP_BUILD=1
+        fi
     fi
 fi
 
@@ -165,20 +179,25 @@ install_precompiled_engine() {
     if pkg install -y llama-cpp 2>/dev/null || pkg install -y llama.cpp 2>/dev/null; then
         SYS_BIN=$(find_existing_server || echo "")
         if [ -n "$SYS_BIN" ] && [ -x "$SYS_BIN" ]; then
-            SERVER_BIN="$SYS_BIN"
-            cp -f "$SERVER_BIN" "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
-            chmod +x "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
-            echo -e "${GREEN}[✓] llama-server installed successfully via Termux package manager!${NC}"
-            return 0
+            PKG_VER=$("$SYS_BIN" --version 2>&1 | grep -o -E "[0-9]{4,5}" | head -n 1 || echo 0)
+            if [ "$PKG_VER" -ge 11960 ] || [ "$PKG_VER" -eq 0 ]; then
+                SERVER_BIN="$SYS_BIN"
+                cp -f "$SERVER_BIN" "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
+                chmod +x "$BUILD_DIR/bin/llama-server" 2>/dev/null || true
+                echo -e "${GREEN}[✓] llama-server installed successfully via Termux package manager!${NC}"
+                return 0
+            else
+                echo -e "${YELLOW}[!] Termux package manager version (b$PKG_VER) is older than b11960. Fetching modern engine...${NC}"
+            fi
         fi
     fi
 
     # Strategy 2: Python-powered native release download & extraction (Zero external dependencies)
-    echo -e "${CYAN}[2/3] Downloading official Android ARM64 release from GitHub (with Python)...${NC}"
+    echo -e "${CYAN}[2/3] Downloading official modern Android ARM64 release from GitHub (with Python)...${NC}"
     export PHONE_SOC="$SOC_NAME"
     export PHONE_DEV="$FULL_DEVICE_NAME"
     if python3 - << 'PY_EOF'
-import sys, os, urllib.request, ssl, tarfile, shutil
+import sys, os, urllib.request, ssl, tarfile, shutil, json
 
 dest_dir = os.path.expanduser("~/llama.cpp")
 build_bin = os.path.join(dest_dir, "build", "bin")
@@ -188,19 +207,46 @@ os.makedirs(build_bin, exist_ok=True)
 soc = os.environ.get("PHONE_SOC", "").lower()
 dev = os.environ.get("PHONE_DEV", "").lower()
 
-# Build URL list (Only modern Snapdragon chips with Hexagon HTP v73+ support dedicated QNN engine; older chips use universal ARM64)
-urls = []
+# Check Qualcomm Snapdragon chips with dedicated NPU/GPU engines
 modern_snapdragons = ["sm8550", "sm8650", "sm8750", "sm8635", "sm7475", "sm7550", "8 gen 2", "8 gen 3", "8 elite", "8s gen 3"]
-if any(k in soc or k in dev for k in modern_snapdragons):
-    print("[*] Modern Qualcomm Snapdragon 8 Gen chip detected: Using dedicated Snapdragon NPU/GPU engine")
-    urls.append("https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64-snapdragon.tar.gz")
-
-urls.extend([
-    "https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64.tar.gz",
-    "https://github.com/ggml-org/llama.cpp/releases/download/b11888/llama-b11888-bin-android-arm64.tar.gz"
-])
+is_snapdragon = any(k in soc or k in dev for k in modern_snapdragons)
+if is_snapdragon:
+    print("[*] Modern Qualcomm Snapdragon 8 Gen chip detected: Looking for Snapdragon NPU/GPU accelerated build")
 
 ctx = ssl._create_unverified_context()
+urls = []
+
+# Dynamically lookup latest release assets from GitHub API (supports LFM3 from b11960+)
+try:
+    api_url = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
+    req = urllib.request.Request(api_url, headers={"User-Agent": "PhoneAsGPU/2.0 (Android; Mobile)"})
+    with urllib.request.urlopen(req, context=ctx, timeout=8) as resp:
+        releases = json.loads(resp.read().decode())
+        for r in releases:
+            assets = r.get("assets", [])
+            asset_map = {a["name"]: a["browser_download_url"] for a in assets}
+            
+            if is_snapdragon:
+                for name, durl in asset_map.items():
+                    if "android-arm64-snapdragon" in name and durl not in urls:
+                        urls.append(durl)
+                        break
+            for name, durl in asset_map.items():
+                if "bin-android-arm64.tar.gz" in name and "snapdragon" not in name and durl not in urls:
+                    urls.append(durl)
+                    break
+            if len(urls) >= 4:
+                break
+except Exception as e:
+    print(f"[*] Note: Dynamic release lookup fallback: {e}")
+
+# High-reliability fallback list of verified modern builds (all with native LFM3 support)
+fallback_builds = ["b12032", "b12031", "b12030", "b12028", "b12024"]
+for b in fallback_builds:
+    if is_snapdragon:
+        urls.append(f"https://github.com/ggml-org/llama.cpp/releases/download/{b}/llama-{b}-bin-android-arm64-snapdragon.tar.gz")
+    urls.append(f"https://github.com/ggml-org/llama.cpp/releases/download/{b}/llama-{b}-bin-android-arm64.tar.gz")
+
 success = False
 tmp_tar = os.path.expanduser("~/llama_tmp.tar.gz")
 
@@ -253,7 +299,6 @@ for root, dirs, files in os.walk(dest_dir):
             src_so = os.path.join(root, f)
             try:
                 os.chmod(src_so, 0o755)
-                # Ensure all shared libraries sit in build_bin and dest_dir/lib
                 for target_d in (build_bin, lib_dir):
                     dst = os.path.join(target_d, f)
                     if src_so != dst:
@@ -290,12 +335,13 @@ PY_EOF
         fi
     fi
 
-    # Strategy 3: Direct curl + tar fallback with insecure SSL & retries
+    # Strategy 3: Direct curl + tar fallback with modern verified release (b12032)
     echo -e "${CYAN}[3/3] Trying curl fallback download...${NC}"
     pkg install -y ca-certificates tar gzip curl 2>/dev/null || true
     TMP_ARCHIVE="$HOME/llama-android.tar.gz"
     rm -f "$TMP_ARCHIVE"
-    curl -k -L --retry 3 --connect-timeout 20 -# -o "$TMP_ARCHIVE" "https://github.com/ggml-org/llama.cpp/releases/download/b11889/llama-b11889-bin-android-arm64.tar.gz" || true
+    curl -k -L --retry 3 --connect-timeout 20 -# -o "$TMP_ARCHIVE" "https://github.com/ggml-org/llama.cpp/releases/download/b12032/llama-b12032-bin-android-arm64.tar.gz" || \
+    curl -k -L --retry 3 --connect-timeout 20 -# -o "$TMP_ARCHIVE" "https://github.com/ggml-org/llama.cpp/releases/download/b12030/llama-b12030-bin-android-arm64.tar.gz" || true
     if [ -f "$TMP_ARCHIVE" ] && [ -s "$TMP_ARCHIVE" ]; then
         tar -xzf "$TMP_ARCHIVE" -C "$INSTALL_DIR" 2>/dev/null || true
         rm -f "$TMP_ARCHIVE"
@@ -469,47 +515,52 @@ if [ "$EXISTING_MODELS" -eq 0 ]; then
     echo -e "${MAGENTA}====================================================${NC}"
     echo -e "Detected Phone RAM: ${YELLOW}${BOLD}${RAM_GB} GB${NC}"
     if [ "$RAM_GB" -le 4 ]; then
-        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 1 (4GB RAM) [Options 1-6]${NC}"
+        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 1 (4GB RAM) [Options 1-8]${NC}"
     elif [ "$RAM_GB" -le 6 ]; then
-        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 2 (6GB RAM) [Options 7-9]${NC}"
+        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 2 (6GB RAM) [Options 9-12]${NC}"
     else
-        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 2 or TIER 3 (8GB+ RAM) [Options 7-12]${NC}"
+        echo -e "${CYAN}👉 Recommended tier for your phone: TIER 2 or TIER 3 (8GB+ RAM) [Options 9-15]${NC}"
     fi
     echo -e "${MAGENTA}----------------------------------------------------${NC}"
 
     echo -e "${GREEN}${BOLD}🟢 TIER 1: FOR 4 GB RAM PHONES (Ultra-Fast & Compact)${NC}"
-    echo -e " 1) ${CYAN}SmolLM2 135M Instruct (Q4_0)${NC}   (~80 MB)  - [FASTEST] Instant token generation"
-    echo -e " 2) ${CYAN}SmolLM2 360M Instruct (Q4_K_M)${NC} (~240 MB) - Very small & structured"
-    echo -e " 3) ${CYAN}Qwen 2.5 0.5B Instruct (Q4_K_M)${NC}(~390 MB) - Compact multilingual powerhouse"
-    echo -e " 4) ${CYAN}Llama 3.2 1B Instruct (Q4_0)${NC}   (~700 MB) - [FASTEST 1B] Meta lightweight model"
-    echo -e " 5) ${CYAN}Llama 3.2 1B Instruct (Q4_K_M)${NC} (~800 MB) - Meta high-accuracy 1B quant"
-    echo -e " 6) ${CYAN}Qwen 2.5 1.5B Instruct (Q4_K_M)${NC}(~1.0 GB) - Great logic & multi-language"
+    echo -e " 1) ${CYAN}SmolLM2 135M Instruct (Q4_0)${NC}        (~80 MB)  - [FASTEST] Instant token generation"
+    echo -e " 2) ${CYAN}SmolLM2 360M Instruct (Q4_K_M)${NC}      (~240 MB) - Very small & structured"
+    echo -e " 3) ${CYAN}Qwen 2.5 0.5B Instruct (Q4_K_M)${NC}     (~390 MB) - Compact multilingual powerhouse"
+    echo -e " 4) ${CYAN}Llama 3.2 1B Instruct (Q4_0)${NC}        (~700 MB) - [FASTEST 1B] Meta lightweight model"
+    echo -e " 5) ${CYAN}Llama 3.2 1B Instruct (Q4_K_M)${NC}     (~800 MB) - Meta high-accuracy 1B quant"
+    echo -e " 6) ${CYAN}Liquid AI LFM3 1.7B (QAD-Q4_0)${NC}     (~1.00 GB) - [NEW LIQUID AI] Tri-hybrid Conv/Attn, QAD 4-bit"
+    echo -e " 7) ${CYAN}Liquid AI LFM3 1.7B (Q4_K_M)${NC}       (~1.05 GB) - [NEW LIQUID AI] 256K context tri-hybrid reasoning"
+    echo -e " 8) ${CYAN}Qwen 2.5 1.5B Instruct (Q4_K_M)${NC}    (~1.0 GB)  - Great logic & multi-language"
 
     echo -e "\n${YELLOW}${BOLD}🟡 TIER 2: FOR 6 GB RAM PHONES (Smart & Balanced)${NC}"
-    echo -e " 7) ${CYAN}Google Gemma 2 2B IT (Q4_K_M)${NC}  (~1.6 GB) - High intelligence 2B by Google"
-    echo -e " 8) ${CYAN}Llama 3.2 3B Instruct (Q4_K_M)${NC} (~2.0 GB) - Recommended sweet-spot for daily chat"
-    echo -e " 9) ${CYAN}Qwen 2.5 3B Instruct (Q4_K_M)${NC}  (~2.1 GB) - Exceptional code & math logic"
+    echo -e " 9) ${CYAN}Google Gemma 2 2B IT (Q4_K_M)${NC}       (~1.6 GB)  - High intelligence 2B by Google"
+    echo -e " 10) ${CYAN}Liquid AI LFM3 Omni 2B (Q4_K_M)${NC}    (~1.05 GB) - [NEW LIQUID AI] Omni-modal (Text, Vision, Audio)"
+    echo -e " 11) ${CYAN}Llama 3.2 3B Instruct (Q4_K_M)${NC}     (~2.0 GB)  - Recommended sweet-spot for daily chat"
+    echo -e " 12) ${CYAN}Qwen 2.5 3B Instruct (Q4_K_M)${NC}       (~2.1 GB)  - Exceptional code & math logic"
 
     echo -e "\n${RED}${BOLD}🔴 TIER 3: FOR 8 GB+ RAM PHONES (Heavy Reasoning & Coding)${NC}"
-    echo -e " 10) ${CYAN}Qwen 2.5 Coder 3B (Q4_K_M)${NC}    (~2.1 GB) - Dedicated Python/JS coding specialist"
-    echo -e " 11) ${CYAN}Phi-3.5 mini 3.8B (Q4_K_M)${NC}    (~2.3 GB) - Microsoft's reasoning champion"
-    echo -e " 12) ${CYAN}Qwen 2.5 7B (Q3_K_M)${NC}          (~3.8 GB) - Flagship intelligence (high memory)"
+    echo -e " 13) ${CYAN}Qwen 2.5 Coder 3B (Q4_K_M)${NC}         (~2.1 GB)  - Dedicated Python/JS coding specialist"
+    echo -e " 14) ${CYAN}Phi-3.5 mini 3.8B (Q4_K_M)${NC}         (~2.3 GB)  - Microsoft's reasoning champion"
+    echo -e " 15) ${CYAN}Qwen 2.5 7B (Q3_K_M)${NC}               (~3.8 GB)  - Flagship intelligence (high memory)"
 
-    echo -e "\n 13) ${MAGENTA}Skip download${NC} (Use existing models or download later in Web UI)"
+    echo -e "\n 16) ${MAGENTA}Skip download${NC} (Use existing models or download later in Web UI)"
     echo -e "${MAGENTA}====================================================${NC}"
 
     MODEL_CHOICE=""
     while true; do
-        read -r -p "Enter model choice [1-13] (or enter 13 to skip download): " MODEL_CHOICE </dev/tty || MODEL_CHOICE="13"
+        read -r -p "Enter model choice [1-16] (or enter 16 to skip download): " MODEL_CHOICE </dev/tty || MODEL_CHOICE="16"
         MODEL_CHOICE=$(echo "$MODEL_CHOICE" | tr -d '[:space:]')
-        if [[ "$MODEL_CHOICE" =~ ^[0-9]+$ ]] && [ "$MODEL_CHOICE" -ge 1 ] && [ "$MODEL_CHOICE" -le 13 ]; then
+        if [[ "$MODEL_CHOICE" =~ ^[0-9]+$ ]] && [ "$MODEL_CHOICE" -ge 1 ] && [ "$MODEL_CHOICE" -le 16 ]; then
             break
         fi
-        echo -e "${RED}Invalid input.${NC} Please enter a number between 1 and 13 (or 13 to skip)."
+        echo -e "${RED}Invalid input.${NC} Please enter a number between 1 and 16 (or 16 to skip)."
     done
 
     MODEL_URL=""
     MODEL_FILE=""
+    MMPROJ_URL=""
+    MMPROJ_FILE=""
 
     case "$MODEL_CHOICE" in
         1)
@@ -533,30 +584,44 @@ if [ "$EXISTING_MODELS" -eq 0 ]; then
             MODEL_URL="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
             ;;
         6)
+            MODEL_FILE="LFM3-1.7B-QAD-Q4_0.gguf"
+            MODEL_URL="https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/LFM3-1.7B-QAD-Q4_0.gguf"
+            ;;
+        7)
+            MODEL_FILE="LFM3-1.7B-Q4_K_M.gguf"
+            MODEL_URL="https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/LFM3-1.7B-Q4_K_M.gguf"
+            ;;
+        8)
             MODEL_FILE="qwen2.5-1.5b-instruct-q4_k_m.gguf"
             MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"
             ;;
-        7)
+        9)
             MODEL_FILE="gemma-2-2b-it-Q4_K_M.gguf"
             MODEL_URL="https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
             ;;
-        8)
+        10)
+            MODEL_FILE="LFM3-Omni-2B-Q4_K_M.gguf"
+            MODEL_URL="https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/LFM3-Omni-2B-Q4_K_M.gguf"
+            MMPROJ_FILE="mmproj-LFM3-Omni-2B-Q4_K_M.gguf"
+            MMPROJ_URL="https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-Q4_K_M.gguf"
+            ;;
+        11)
             MODEL_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
             MODEL_URL="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
             ;;
-        9)
+        12)
             MODEL_FILE="qwen2.5-3b-instruct-q4_k_m.gguf"
             MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
             ;;
-        10)
+        13)
             MODEL_FILE="qwen2.5-coder-3b-instruct-q4_k_m.gguf"
             MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf"
             ;;
-        11)
+        14)
             MODEL_FILE="Phi-3.5-mini-instruct-Q4_K_M.gguf"
             MODEL_URL="https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
             ;;
-        12)
+        15)
             MODEL_FILE="qwen2.5-7b-instruct-q3_k_m.gguf"
             MODEL_URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf"
             ;;
@@ -609,6 +674,28 @@ PY_DL
             echo -e "${YELLOW}[!] Download was incomplete. You can download or mount weights from the Web UI.${NC}"
             rm -f "$MODELS_DIR/$MODEL_FILE"
         fi
+
+        # Download multimodal projector if applicable (e.g. LFM3 Omni)
+        if [ -n "$MMPROJ_URL" ]; then
+            echo -e "\n${BLUE}[*] Downloading companion multimodal projector: $MMPROJ_FILE...${NC}"
+            curl -k -L --retry 3 --connect-timeout 20 -# -o "$MODELS_DIR/$MMPROJ_FILE" "$MMPROJ_URL" || true
+            MMP_SIZE=$(wc -c < "$MODELS_DIR/$MMPROJ_FILE" 2>/dev/null || echo 0)
+            if [ "$MMP_SIZE" -lt 5000000 ]; then
+                python3 - << PY_MMP
+import urllib.request, ssl, sys
+ctx = ssl._create_unverified_context()
+req = urllib.request.Request("$MMPROJ_URL", headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+try:
+    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp, open("$MODELS_DIR/$MMPROJ_FILE", "wb") as f:
+        shutil.copyfileobj(resp, f)
+except Exception:
+    pass
+PY_MMP
+            fi
+            if [ -f "$MODELS_DIR/$MMPROJ_FILE" ] && [ -s "$MODELS_DIR/$MMPROJ_FILE" ]; then
+                echo -e "${GREEN}[✓] Multimodal projector ready: $MODELS_DIR/$MMPROJ_FILE${NC}"
+            fi
+        fi
     fi
 fi
 
@@ -621,9 +708,12 @@ PHONE_IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3
 echo -e "\n${CYAN}====================================================${NC}"
 echo -e "${GREEN}   🚀 STARTING LOCAL AI HUB (WEB UI + API)         ${NC}"
 echo -e "${CYAN}====================================================${NC}"
-echo -e " Phone Web UI : ${YELLOW}http://localhost:8080${NC}"
-echo -e " PC Wi-Fi     : ${YELLOW}http://$PHONE_IP:8080${NC}"
-echo -e " PC USB (ADB) : ${CYAN}adb forward tcp:8080 tcp:8080${NC} -> ${YELLOW}http://localhost:8080${NC}"
+echo -e " 📱 Phone Web UI (Browser)    : ${YELLOW}http://localhost:8080${NC}"
+echo -e " ⚡ Phone Base URL (Same Phone): ${GREEN}${BOLD}http://127.0.0.1:8080/v1${NC}  <-- In-App API"
+echo -e " ⚡ Phone Base URL (Alt)      : ${GREEN}http://localhost:8080/v1${NC}"
+echo -e " 🌐 PC Wi-Fi Web UI           : ${YELLOW}http://$PHONE_IP:8080${NC}"
+echo -e " 🌐 PC Wi-Fi Base URL         : ${YELLOW}http://$PHONE_IP:8080/v1${NC}"
+echo -e " 🔌 PC USB (ADB Bridge)       : ${CYAN}adb forward tcp:8080 tcp:8080${NC} -> ${YELLOW}http://localhost:8080/v1${NC}"
 echo -e "${CYAN}====================================================${NC}\n"
 
 exec python3 "$SCRIPT_DIR/app.py"

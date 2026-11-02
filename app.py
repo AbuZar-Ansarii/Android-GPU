@@ -21,6 +21,14 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
+# Ensure UTF-8 output across Termux, Linux, macOS, and Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Configuration
 PORT = int(os.environ.get("PORT", 8080))
 LLAMA_PORT = 50053
@@ -151,7 +159,8 @@ def get_binary_features(binary_path):
         "flash_attn": False,
         "kv_quant": False,
         "gpu_layers": False,
-        "vulkan": False
+        "vulkan": False,
+        "mmproj": False
     }
     try:
         env = get_binary_env(binary_path)
@@ -168,11 +177,49 @@ def get_binary_features(binary_path):
             features["gpu_layers"] = True
         if any(term in help_text.lower() for term in ["vulkan", "ggml_vulkan", "opencl", "qualcomm", "snapdragon", "qnn"]):
             features["vulkan"] = True
+        if "--mmproj" in help_text or "-mmp" in help_text:
+            features["mmproj"] = True
     except Exception:
         pass
 
     _binary_features_cache[binary_path] = features
     return features
+
+def find_matching_mmproj(model_path):
+    """
+    Find matching multimodal projector (mmproj-*.gguf) for vision/omni/audio models
+    in the same directory or the models directory (e.g. LFM3 Omni, LLaVA, MiniCPM).
+    """
+    if not model_path:
+        return None
+    model_dir = os.path.dirname(os.path.abspath(model_path))
+    model_base = os.path.basename(model_path)
+    model_stem = os.path.splitext(model_base)[0].lower()
+    
+    # 1. Direct candidate: mmproj-<model_filename>
+    direct_candidates = [
+        os.path.join(model_dir, f"mmproj-{model_base}"),
+        os.path.join(MODELS_DIR, f"mmproj-{model_base}"),
+        os.path.join(model_dir, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-")),
+        os.path.join(MODELS_DIR, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-"))
+    ]
+    for c in direct_candidates:
+        if os.path.isfile(c):
+            return c
+
+    # 2. Check all files in model_dir and MODELS_DIR starting with mmproj
+    for sdir in [model_dir, MODELS_DIR]:
+        if os.path.isdir(sdir):
+            try:
+                for f in os.listdir(sdir):
+                    fl = f.lower()
+                    if fl.startswith("mmproj") and fl.endswith(".gguf"):
+                        # Match family keywords
+                        if any(kw in model_stem and kw in fl for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio"]):
+                            return os.path.join(sdir, f)
+            except Exception:
+                pass
+    return None
 
 def detect_cpu_topology():
     """
@@ -372,13 +419,14 @@ def _poll_server_health(proc, timeout_sec=35, port=None):
         time.sleep(0.5)
     return False
 
-def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="f16", gpu_layers=0, pin_cores=True):
+def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="f16", gpu_layers=0, pin_cores=True, mmproj_path=None):
     """
     Start llama-server with hardware acceleration flags:
     - Big-core CPU affinity (prevents slow efficiency core stalls)
     - Flash Attention (reduces RAM usage & attention computational complexity)
     - 8-bit Key-Value cache quantization (halves KV memory bandwidth bottleneck)
     - Mobile GPU offload via Vulkan (if compiled with Vulkan support)
+    - Multimodal projector support (for LFM3 Omni, vision, and audio models)
     - Optimized batch & micro-batch sizes for mobile CPU caches
     """
     global llama_process, current_model_path, current_model_name, current_llama_port, active_runtime_config
@@ -398,6 +446,10 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if threads is None or threads <= 0:
         threads = cpu_topo["recommended_threads"]
 
+    # Detect multimodal projector (for LFM3 Omni, LLaVA, etc.)
+    if not mmproj_path:
+        mmproj_path = find_matching_mmproj(model_path)
+
     # Acquire guaranteed free port
     active_port = find_free_port(LLAMA_PORT)
     current_llama_port = active_port
@@ -411,6 +463,10 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         "--host", "127.0.0.1",
         "--port", str(active_port)
     ]
+
+    # Attach multimodal projector if found and supported
+    if mmproj_path and os.path.isfile(mmproj_path) and features.get("mmproj"):
+        base_args.extend(["--mmproj", mmproj_path])
 
     # Build accelerated command
     accel_args = list(base_args)
@@ -434,6 +490,8 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
     print("=" * 60)
     print(f"[*] Model       : {os.path.basename(model_path)}")
+    if mmproj_path and os.path.isfile(mmproj_path):
+        print(f"[*] Multimodal  : {os.path.basename(mmproj_path)} (Omni/Vision Active)")
     print(f"[*] Port        : {active_port}")
     print(f"[*] Threads     : {threads} (Optimal ARM core allocation)")
     print(f"[*] Context     : {ctx_size} tokens")
@@ -532,7 +590,8 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             "flash_attn": bool(flash_attn and is_accel and fa_style),
             "kv_quant": kv_quant if (kv_quant != "f16" and is_accel and features.get("kv_quant")) else "f16",
             "gpu_layers": gpu_layers if (is_accel and features.get("gpu_layers")) else 0,
-            "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None
+            "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None,
+            "mmproj": os.path.basename(mmproj_path) if (mmproj_path and os.path.isfile(mmproj_path)) else None
         }
 
 def scan_models(include_downloads=True):
@@ -658,22 +717,28 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, HEAD")
         self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         self.end_headers()
         self.wfile.write(data)
 
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, HEAD")
         self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        clean_path = path.rstrip("/") if path != "/" else "/"
 
-        if path in ("/", "/index.html"):
+        if clean_path in ("/", "/index.html"):
             index_path = os.path.join(WEB_DIR, "index.html")
             if os.path.isfile(index_path):
                 with open(index_path, "rb") as f:
@@ -681,13 +746,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(content)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Private-Network", "true")
                 self.end_headers()
                 self.wfile.write(content)
             else:
                 self.send_error(404, "Web UI not found")
             return
 
-        elif path == "/api/status":
+        elif clean_path in ("/api/status", "/status"):
             with state_lock:
                 loaded = (llama_process is not None and llama_process.poll() is None)
                 model = current_model_name if loaded else None
@@ -697,11 +764,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             features = get_binary_features(binary) if binary else {}
             cpu_topo = detect_cpu_topology()
             telemetry = get_hardware_telemetry()
+            local_ip = get_local_ip()
 
             self.send_json(200, {
                 "loaded": loaded,
                 "current_model": model,
-                "ip": get_local_ip(),
+                "ip": local_ip,
+                "endpoints": {
+                    "local_phone": f"http://127.0.0.1:{PORT}/v1",
+                    "local_phone_alt": f"http://localhost:{PORT}/v1",
+                    "wifi": f"http://{local_ip}:{PORT}/v1",
+                    "pc_usb": f"http://localhost:{PORT}/v1"
+                },
                 "config": config,
                 "cpu": cpu_topo,
                 "features": features,
@@ -709,24 +783,86 @@ class RequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        elif path == "/api/models":
+        elif clean_path in ("/api/models", "/models_local"):
             query = parse_qs(parsed.query)
             include_dl = "scan_downloads" in query
             models = scan_models(include_downloads=include_dl)
             self.send_json(200, models)
             return
 
-        elif path == "/api/download_status":
+        elif clean_path == "/api/download_status":
             self.send_json(200, download_state)
             return
 
-        elif path == "/v1/models":
+        elif clean_path in ("/v1", "/health", "/v1/health"):
             with state_lock:
                 loaded = (llama_process is not None and llama_process.poll() is None)
-                model = current_model_name if loaded else "no-model-loaded"
+                model = current_model_name if loaded else None
+            self.send_json(200, {
+                "status": "ok",
+                "loaded": loaded,
+                "model": model,
+                "message": "Phone as GPU OpenAI API is active and ready",
+                "endpoints": {
+                    "chat": "/v1/chat/completions",
+                    "completions": "/v1/completions",
+                    "models": "/v1/models"
+                }
+            })
+            return
+
+        elif clean_path in ("/v1/models", "/models"):
+            with state_lock:
+                loaded = (llama_process is not None and llama_process.poll() is None)
+                active_model = current_model_name if loaded else None
+            
+            scanned = scan_models(include_downloads=True)
+            models_data = []
+            seen = set()
+
+            if active_model:
+                models_data.append({
+                    "id": active_model,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "phone-as-gpu",
+                    "active": True
+                })
+                seen.add(active_model)
+
+            for m in scanned:
+                if m["name"] not in seen:
+                    models_data.append({
+                        "id": m["name"],
+                        "object": "model",
+                        "created": int(time.time()),
+                        "owned_by": "phone-as-gpu",
+                        "active": False
+                    })
+                    seen.add(m["name"])
+
+            if not models_data:
+                models_data.append({
+                    "id": "default",
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "phone-as-gpu",
+                    "active": False
+                })
+
             self.send_json(200, {
                 "object": "list",
-                "data": [{"id": model, "object": "model", "owned_by": "phone"}]
+                "data": models_data
+            })
+            return
+
+        elif clean_path.startswith("/v1/models/") or clean_path.startswith("/models/"):
+            mid = clean_path.split("/")[-1]
+            self.send_json(200, {
+                "id": mid,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "phone-as-gpu"
             })
             return
 
@@ -735,6 +871,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        clean_path = path.rstrip("/") if path != "/" else "/"
 
         content_len = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_len) if content_len > 0 else b"{}"
@@ -744,7 +881,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             payload = {}
 
-        if path == "/api/load":
+        if clean_path == "/api/load":
             model_path = payload.get("path")
             if not model_path:
                 self.send_json(400, {"error": "Missing model path"})
@@ -758,6 +895,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 kv_quant = str(payload.get("kv_quant", "f16"))
                 gpu_layers = int(payload.get("gpu_layers", 0))
                 pin_cores = bool(payload.get("pin_cores", True))
+                mmproj_path = payload.get("mmproj_path")
 
                 start_llama_server(
                     model_path=model_path,
@@ -766,7 +904,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     flash_attn=flash_attn,
                     kv_quant=kv_quant,
                     gpu_layers=gpu_layers,
-                    pin_cores=pin_cores
+                    pin_cores=pin_cores,
+                    mmproj_path=mmproj_path
                 )
                 self.send_json(200, {
                     "status": "ok",
@@ -777,12 +916,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {"error": str(e)})
             return
 
-        elif path == "/api/unload":
+        elif clean_path == "/api/unload":
             stop_llama_server()
             self.send_json(200, {"status": "ok", "message": "Model unloaded"})
             return
 
-        elif path == "/api/download":
+        elif clean_path == "/api/download":
             url = payload.get("url")
             filename = payload.get("filename")
             if not url or not filename:
@@ -795,21 +934,67 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"status": "started", "destination": dest})
             return
 
-        elif path in ("/v1/chat/completions", "/v1/completions"):
-            # Proxy directly to llama-server with optimized SSE streaming
+        elif clean_path in (
+            "/v1/chat/completions", "/chat/completions",
+            "/v1/completions", "/completions",
+            "/v1/embeddings", "/embeddings"
+        ):
+            # 1. Verify or auto-load model if none currently active
             with state_lock:
                 loaded = (llama_process is not None and llama_process.poll() is None)
 
             if not loaded:
-                self.send_json(400, {"error": "No model loaded. Please load a model from the Web UI first."})
+                req_model = payload.get("model") if isinstance(payload, dict) else None
+                available = scan_models(include_downloads=True)
+                target_path = None
+                if available:
+                    if req_model:
+                        for m in available:
+                            if req_model.lower() in m["name"].lower() or req_model.lower() in m["path"].lower():
+                                target_path = m["path"]
+                                break
+                    if not target_path:
+                        target_path = available[0]["path"]
+                    
+                    print(f"[*] Auto-loading model for incoming OpenAI API request: {os.path.basename(target_path)}")
+                    try:
+                        start_llama_server(target_path)
+                        with state_lock:
+                            loaded = (llama_process is not None and llama_process.poll() is None)
+                    except Exception as e:
+                        print(f"[!] Auto-load failed: {e}")
+
+            if not loaded:
+                self.send_json(400, {
+                    "error": {
+                        "message": "No model loaded on phone. Please load or download a model first from the Web UI.",
+                        "type": "invalid_request_error",
+                        "code": "model_not_found"
+                    }
+                })
                 return
 
+            # 2. Normalize destination route for llama-server
+            if clean_path in ("/v1/chat/completions", "/chat/completions"):
+                proxy_subpath = "/v1/chat/completions"
+            elif clean_path in ("/v1/completions", "/completions"):
+                proxy_subpath = "/v1/completions"
+            elif clean_path in ("/v1/embeddings", "/embeddings"):
+                proxy_subpath = "/v1/embeddings"
+            else:
+                proxy_subpath = clean_path
+
             try:
-                llama_url = f"http://127.0.0.1:{current_llama_port}{path}"
+                llama_url = f"http://127.0.0.1:{current_llama_port}{proxy_subpath}"
+                headers = {"Content-Type": "application/json"}
+                auth = self.headers.get("Authorization")
+                if auth:
+                    headers["Authorization"] = auth
+
                 req = urllib.request.Request(
                     llama_url,
                     data=body,
-                    headers={"Content-Type": "application/json"}
+                    headers=headers
                 )
 
                 with urllib.request.urlopen(req) as resp:
@@ -829,7 +1014,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                         self.send_header("X-Accel-Buffering", "no")
 
                     self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, HEAD")
                     self.send_header("Access-Control-Allow-Headers", "*")
+                    self.send_header("Access-Control-Allow-Private-Network", "true")
                     self.end_headers()
 
                     # Stream line-by-line for SSE to preserve chunk integrity
@@ -848,7 +1035,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             self.wfile.write(chunk)
                             self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                # Client disconnected or aborted stream (e.g. user tapped Stop)
+                # Client disconnected or aborted stream
                 pass
             except Exception as e:
                 try:
@@ -875,21 +1062,26 @@ if __name__ == "__main__":
     binary = find_llama_server_binary()
     features = get_binary_features(binary) if binary else {}
 
-    print("=" * 60)
-    print("       PHONE AS GPU - LOCAL AI HUB RUNNING")
-    print("=" * 60)
-    print(f"[*] Phone Local Web UI : http://localhost:{PORT}")
-    print(f"[*] Wi-Fi Web UI       : http://{ip}:{PORT}")
-    print(f"[*] OpenAI API Base    : http://{ip}:{PORT}/v1")
-    print(f"[*] USB Port Forward   : adb forward tcp:{PORT} tcp:{PORT}")
-    print(f"[*] Detected CPU       : {cpu_topo['total_cores']} cores (Optimal Threads: {cpu_topo['recommended_threads']})")
+    print("=" * 65)
+    print("       [*] PHONE AS GPU - LOCAL AI HUB RUNNING")
+    print("=" * 65)
+    print(f"[*] Phone Web UI (Browser)     : http://localhost:{PORT}")
+    print(f"[*] Phone Base URL (Same Phone): http://127.0.0.1:{PORT}/v1  <-- IN-APP API")
+    print(f"[*] Phone Base URL (Alt)       : http://localhost:{PORT}/v1")
+    print(f"[*] PC Wi-Fi Web UI            : http://{ip}:{PORT}")
+    print(f"[*] PC Wi-Fi Base URL          : http://{ip}:{PORT}/v1")
+    print(f"[*] PC USB Port Forward        : adb forward tcp:{PORT} tcp:{PORT}")
+    print(f"[*] PC USB Base URL            : http://localhost:{PORT}/v1")
+    print(f"[*] Detected CPU               : {cpu_topo['total_cores']} cores (Optimal Threads: {cpu_topo['recommended_threads']})")
     if cpu_topo.get("affinity_str"):
-        print(f"[*] Performance Cores  : {cpu_topo['affinity_str']} (Big Core Pinning Ready)")
+        print(f"[*] Performance Cores          : {cpu_topo['affinity_str']} (Big Core Pinning Ready)")
     if features.get("vulkan"):
-        print(f"[*] Hardware Engine    : Vulkan Mobile GPU Acceleration ACTIVE")
+        print(f"[*] Hardware Engine            : Vulkan Mobile GPU Acceleration ACTIVE")
     elif features.get("flash_attn"):
-        print(f"[*] Hardware Engine    : ARM NEON + Flash Attention + 8-bit KV")
-    print("=" * 60)
+        print(f"[*] Hardware Engine            : ARM NEON + Flash Attention + 8-bit KV")
+    if features.get("mmproj"):
+        print(f"[*] Multimodal Support         : Active (LFM3 Omni, Vision & Audio Supported)")
+    print("=" * 65)
 
     # Auto-load existing model at startup if available
     available_models = scan_models(include_downloads=True)

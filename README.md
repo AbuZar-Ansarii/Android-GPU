@@ -201,6 +201,8 @@ Choose a model matched to your phone's total RAM capacity. Using 4-bit (`Q4_K_M`
 | **Qwen 2.5** | 0.5B | Q4_K_M | ~390 MB | Multilingual & basic code generation |
 | **Llama 3.2** | 1B | Q4_0 | ~700 MB | **[Fastest 1B]** Meta lightweight model with fastest SIMD math |
 | **Llama 3.2** | 1B | Q4_K_M | ~800 MB | Meta's flagship lightweight general assistant |
+| **Liquid AI LFM3** | 1.7B | QAD-Q4_0 | ~1.00 GB | **[Liquid AI]** Tri-hybrid Conv/Attn with QAD 4-bit distillation |
+| **Liquid AI LFM3** | 1.7B | Q4_K_M | ~1.05 GB | **[Liquid AI]** 256K context tri-hybrid edge reasoning model |
 | **Qwen 2.5** | 1.5B | Q4_K_M | ~1.0 GB | High reasoning, logic, and multi-language |
 
 ---
@@ -210,6 +212,7 @@ Choose a model matched to your phone's total RAM capacity. Using 4-bit (`Q4_K_M`
 
 | Model | Parameters | Quantization | RAM Footprint | Strengths |
 | :--- | :--- | :--- | :--- | :--- |
+| **Liquid AI LFM3 Omni** | 2B | Q4_K_M | ~1.05 GB | **[Omni-Modal]** End-to-end multimodal (text, vision & audio offload) |
 | **Google Gemma 2** | 2B | Q4_K_M | ~1.6 GB | High-intelligence 2B model derived from Gemini |
 | **Llama 3.2** | 3B | Q4_K_M | ~2.0 GB | Recommended daily driver for chat & summaries |
 | **Qwen 2.5** | 3B | Q4_K_M | ~2.1 GB | Exceptional Python/JS code synthesis & math |
@@ -229,7 +232,23 @@ Choose a model matched to your phone's total RAM capacity. Using 4-bit (`Q4_K_M`
 
 ## 🔌 OpenAI API Integration
 
-You can use your phone as the local AI engine inside your favorite development tools.
+You can use your phone as a private, local OpenAI-compatible API endpoint directly on the **same phone** or connected across your PC.
+
+### 📍 Available Base URLs
+
+| Location / Client | Base URL | Network / Requirements |
+| :--- | :--- | :--- |
+| **📱 On the Same Phone** | `http://127.0.0.1:8080/v1` *(or `http://localhost:8080/v1`)* | 100% offline, zero Wi-Fi required |
+| **💻 On PC via USB (ADB)** | `http://localhost:8080/v1` | Run `start_pc_bridge.bat` (zero latency) |
+| **🌐 Over Local Wi-Fi** | `http://<PHONE_IP>:8080/v1` | Same Wi-Fi network (displayed in app) |
+
+> **Note on API Keys:** The endpoint is 100% local and open. If your client app (like Chatbox, ChatterUI, or Continue) requires an API key, you can enter any string (e.g. `phone-gpu` or `not-needed`).
+
+### 📱 Using on the Same Phone (Android Apps / Scripts)
+You can point mobile AI chat apps (like **Chatbox**, **ChatterUI**, **NextChat**, **LibreChat**, or **Termux Python scripts**) directly to the engine running in the background:
+* **API Host / Base URL:** `http://127.0.0.1:8080/v1` (or `http://localhost:8080/v1`)
+* **API Key:** `phone-gpu`
+* **Models:** Call `GET http://127.0.0.1:8080/v1/models` or pick your loaded `.gguf` model from the dropdown.
 
 ### VS Code (Continue / Roo Code / Cline)
 Add this to your `config.json`:
@@ -242,22 +261,32 @@ Add this to your `config.json`:
       "provider": "openai",
       "model": "local-phone-model",
       "apiBase": "http://localhost:8080/v1",
-      "apiKey": "not-needed"
+      "apiKey": "phone-gpu"
     }
   ]
 }
 ```
 
-### Python (OpenAI SDK)
+### Python (OpenAI SDK on Phone or PC)
 ```python
 from openai import OpenAI
 
+# Works in Termux on the phone or on your PC!
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="not-needed"
+    base_url="http://127.0.0.1:8080/v1",  # Use http://localhost:8080/v1 on PC
+    api_key="phone-gpu"
 )
 
 response = client.chat.completions.create(
+    model="local-phone-model",
+    messages=[
+        {"role": "system", "content": "You are an expert AI assistant running on a smartphone."},
+        {"role": "user", "content": "Explain how distributed computing works in 2 sentences."}
+    ]
+)
+
+print(response.choices[0].message.content)
+```
     model="local-phone-model",
     messages=[
         {"role": "system", "content": "You are an expert AI assistant running on a smartphone."},
