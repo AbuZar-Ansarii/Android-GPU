@@ -199,9 +199,10 @@ PAIRED_PROJECTORS = {
     }
 }
 
-def find_all_projectors():
+def find_all_projectors(extra_dirs=None):
     """
     Discover all multimodal projectors (*mmproj*.gguf) across phone storage and models directory.
+    Searches models directory, phone download directories, custom extra_dirs, and their subdirectories.
     Returns list of dicts with name, path, size, and location.
     """
     search_dirs = [
@@ -213,32 +214,47 @@ def find_all_projectors():
         os.path.expanduser("~/storage/downloads"),
         os.path.expanduser("~/storage/shared/Download")
     ]
+    if extra_dirs:
+        for ed in extra_dirs:
+            if ed and ed not in search_dirs:
+                search_dirs.insert(0, ed)
+
     projectors = []
     seen = set()
     for d in search_dirs:
         if d and os.path.isdir(d):
+            scan_targets = [d]
             try:
-                for f in os.listdir(d):
-                    fl = f.lower()
-                    if fl.endswith(".gguf") and ("mmproj" in fl or "projector" in fl):
-                        p = os.path.join(d, f)
-                        rp = os.path.realpath(p)
-                        if rp not in seen and os.path.isfile(p):
-                            seen.add(rp)
-                            try:
-                                size_bytes = os.path.getsize(p)
-                                size_mb = size_bytes / (1024 * 1024)
-                                size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
-                            except Exception:
-                                size_str = "Unknown"
-                            projectors.append({
-                                "name": f,
-                                "path": p,
-                                "size": size_str,
-                                "location": "models" if d == MODELS_DIR else "downloads"
-                            })
+                for sub in os.listdir(d):
+                    sub_p = os.path.join(d, sub)
+                    if os.path.isdir(sub_p) and not sub.startswith("."):
+                        scan_targets.append(sub_p)
             except Exception:
                 pass
+
+            for target in scan_targets:
+                try:
+                    for f in os.listdir(target):
+                        fl = f.lower()
+                        if fl.endswith(".gguf") and ("mmproj" in fl or "projector" in fl):
+                            p = os.path.join(target, f)
+                            rp = os.path.realpath(p)
+                            if rp not in seen and os.path.isfile(p):
+                                seen.add(rp)
+                                try:
+                                    size_bytes = os.path.getsize(p)
+                                    size_mb = size_bytes / (1024 * 1024)
+                                    size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
+                                except Exception:
+                                    size_str = "Unknown"
+                                projectors.append({
+                                    "name": f,
+                                    "path": p,
+                                    "size": size_str,
+                                    "location": "models" if target == MODELS_DIR else os.path.basename(target)
+                                })
+                except Exception:
+                    pass
     return projectors
 
 def find_matching_mmproj(model_path):
@@ -252,71 +268,34 @@ def find_matching_mmproj(model_path):
     model_base = os.path.basename(model_path)
     model_stem = os.path.splitext(model_base)[0].lower()
 
-    search_dirs = [
-        model_dir,
-        MODELS_DIR,
-        "/sdcard/Download",
-        "/sdcard/Downloads",
-        "/storage/emulated/0/Download",
-        "/storage/emulated/0/Downloads",
-        os.path.expanduser("~/storage/downloads"),
-        os.path.expanduser("~/storage/shared/Download")
-    ]
-    seen_dirs = set()
-    valid_dirs = []
-    for d in search_dirs:
-        if d and os.path.isdir(d):
-            rp = os.path.realpath(d)
-            if rp not in seen_dirs:
-                seen_dirs.add(rp)
-                valid_dirs.append(d)
+    # Discover all projectors including in model_dir and its subdirectories
+    all_projs = find_all_projectors(extra_dirs=[model_dir, os.path.dirname(model_dir)])
 
-    # 1. Direct name variations for LFM3 Omni
+    # 1. Direct match for LFM3 Omni projector
     if "lfm3" in model_stem and "omni" in model_stem:
-        for sdir in valid_dirs:
-            for fname in [
-                "mmproj-LFM3-Omni-2B-F16.gguf",
-                "mmproj-LFM3-Omni-2B-f16.gguf",
-                "mmproj-LFM3-Omni-2B-Q4_K_M.gguf",
-                "mmproj-LFM3-Omni-2B.gguf"
-            ]:
-                p = os.path.join(sdir, fname)
-                if os.path.isfile(p):
-                    return p
-
-    # 2. Direct candidate: mmproj-<model_filename>
-    for sdir in valid_dirs:
-        for c in [
-            os.path.join(sdir, f"mmproj-{model_base}"),
-            os.path.join(sdir, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-")),
-            os.path.join(sdir, "mmproj-model-f16.gguf"),
-            os.path.join(sdir, "mmproj-model-q4_0.gguf")
-        ]:
-            if os.path.isfile(c):
-                return c
-
-    # 3. Check all files in valid directories starting with mmproj
-    for sdir in valid_dirs:
-        try:
-            for f in os.listdir(sdir):
-                fl = f.lower()
-                if fl.startswith("mmproj") and fl.endswith(".gguf"):
-                    # Match family keywords
-                    if any(kw in model_stem and kw in fl for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio", "moondream", "smolvlm", "qwen"]):
-                        return os.path.join(sdir, f)
-                    if any(kw in model_stem for kw in ["omni", "vision", "vl"]):
-                        return os.path.join(sdir, f)
-        except Exception:
-            pass
-
-    # 4. Fallback to any discovered projector if only one exists or matches
-    all_projs = find_all_projectors()
-    if all_projs:
         for p in all_projs:
-            if any(kw in model_stem and kw in p["name"].lower() for kw in ["omni", "lfm", "llava", "minicpm", "vision"]):
+            p_name = p["name"].lower()
+            if "lfm3" in p_name and "omni" in p_name:
                 return p["path"]
-        if len(all_projs) == 1:
-            return all_projs[0]["path"]
+            if "mmproj" in p_name and ("f16" in p_name or "omni" in p_name or "2b" in p_name):
+                return p["path"]
+
+    # 2. Check for exact model stem matches (e.g. mmproj-<model_filename>)
+    clean_stem = model_stem.replace("-q4_k_m", "").replace("-q4_0", "").replace("-f16", "")
+    for p in all_projs:
+        p_name = p["name"].lower()
+        if clean_stem in p_name or model_base.lower().replace(".gguf", "") in p_name:
+            return p["path"]
+
+    # 3. Match family keywords
+    for p in all_projs:
+        p_name = p["name"].lower()
+        if any(kw in model_stem and kw in p_name for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio", "moondream", "smolvlm", "qwen"]):
+            return p["path"]
+
+    # 4. Fallback to any discovered projector if only one exists
+    if len(all_projs) == 1:
+        return all_projs[0]["path"]
 
     return None
 
@@ -851,14 +830,40 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         if not mmproj_path:
             mmproj_path = find_matching_mmproj(model_path)
         if not mmproj_path or not os.path.isfile(mmproj_path):
-            all_projs = find_all_projectors()
+            all_projs = find_all_projectors(extra_dirs=[os.path.dirname(os.path.abspath(model_path))])
             if all_projs:
                 matched = [p["path"] for p in all_projs if any(k in model_name_lower and k in p["name"].lower() for k in ["lfm3", "omni", "llava", "minicpm", "qwen", "smolvlm"])]
                 mmproj_path = matched[0] if matched else all_projs[0]["path"]
+
+        # If projector is missing from storage, attempt automatic download for known paired models (e.g. LFM3 Omni)
+        if not mmproj_path or not os.path.isfile(mmproj_path):
+            target_proj_info = None
+            for pkey, pinfo in PAIRED_PROJECTORS.items():
+                if pkey in model_name_lower and not model_name_lower.startswith("mmproj"):
+                    target_proj_info = pinfo
+                    break
+
+            if target_proj_info:
+                proj_file = target_proj_info["filename"]
+                proj_url = target_proj_info["url"]
+                proj_dest = os.path.join(MODELS_DIR, proj_file)
+                print(f"[*] Multimodal projector missing on device for {os.path.basename(model_path)}.")
+                print(f"[*] Auto-downloading companion visual projector: {proj_file}...")
+                try:
+                    ctx = ssl._create_unverified_context()
+                    req = urllib.request.Request(proj_url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+                    with urllib.request.urlopen(req, context=ctx, timeout=120) as resp, open(proj_dest, "wb") as pf:
+                        shutil.copyfileobj(resp, pf)
+                    if os.path.isfile(proj_dest) and os.path.getsize(proj_dest) > 1024 * 1024:
+                        mmproj_path = proj_dest
+                        print(f"[✓] Successfully auto-downloaded paired projector: {proj_file}")
+                except Exception as pe:
+                    print(f"[!] Warning: Auto-download of projector failed: {pe}")
+
         if not mmproj_path or not os.path.isfile(mmproj_path):
             raise RuntimeError(
                 f"Multimodal Projector Missing: {modality.title()} mode requires a paired mmproj projector (.gguf). "
-                f"Please download mmproj-LFM3-Omni-2B-F16.gguf or select an mmproj file from storage."
+                f"Please download mmproj-LFM3-Omni-2B-F16.gguf or select 'Text Only' mode to run this model as a standard text LLM."
             )
         # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
         if ctx_size < 4096:
