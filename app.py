@@ -327,7 +327,7 @@ def resolve_image_url_to_base64(url):
         print(f"[!] Warning: Could not pre-fetch remote image URL {url}: {e}")
         return url
 
-def robust_clean_json(text):
+def robust_clean_json(text, enforce_action_json=False):
     """
     Sanitize AI response to extract pure parseable JSON.
     Essential for autonomous phone/screen control agents (DroidRun, AutoDroid, Mobile-Agent, etc.)
@@ -335,19 +335,21 @@ def robust_clean_json(text):
     conversational text, markdown code fences, single quotes, or trailing commas.
     """
     if not text or not isinstance(text, str):
-        return text
+        return text if not enforce_action_json else json.dumps({"action": "unknown"})
 
-    # 1. Strip <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>, <system>...</system>
-    text_clean = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
-    text_clean = re.sub(r'<thought>[\s\S]*?</thought>', '', text_clean, flags=re.IGNORECASE)
-    text_clean = re.sub(r'<reasoning>[\s\S]*?</reasoning>', '', text_clean, flags=re.IGNORECASE)
-    text_clean = re.sub(r'<system>[\s\S]*?</system>', '', text_clean, flags=re.IGNORECASE)
+    # 1. Strip <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>, <system>...</system>, <reflect>...</reflect>
+    text_clean = re.sub(r'<(?:think|thought|reasoning|system|reflect|scratchpad)>[\s\S]*?</(?:think|thought|reasoning|system|reflect|scratchpad)>', '', text, flags=re.IGNORECASE)
 
-    # 2. Extract content from markdown code fences if present ```json ... ``` or ``` ... ```
+    # 2. Extract content from XML action wrappers if present e.g. <action>...</action> or <json>...</json>
+    xml_wrapper = re.search(r'<(?:action|json|output|response|answer)>\s*([\s\S]*?)\s*</(?:action|json|output|response|answer)>', text_clean, re.IGNORECASE)
+    if xml_wrapper:
+        text_clean = xml_wrapper.group(1).strip()
+
+    # 3. Extract content from markdown code fences if present ```json ... ``` or ``` ... ```
     fence_matches = re.findall(r'```(?:json)?\s*([\s\S]*?)\s*```', text_clean, re.IGNORECASE)
     if fence_matches:
         for fm in fence_matches:
-            if "{" in fm or "action" in fm.lower():
+            if "{" in fm or any(kw in fm.lower() for kw in ["action", "coordinate", "tap", "click"]):
                 text_clean = fm.strip()
                 break
         else:
@@ -355,14 +357,17 @@ def robust_clean_json(text):
 
     text_stripped = text_clean.strip()
 
-    # 3. Direct JSON load attempt
+    # 4. Direct JSON load attempt
     try:
-        json.loads(text_stripped)
-        return text_stripped
+        loaded = json.loads(text_stripped)
+        if isinstance(loaded, dict):
+            return text_stripped
+        if isinstance(loaded, list) and len(loaded) > 0 and isinstance(loaded[0], dict):
+            return json.dumps(loaded[0])
     except Exception:
         pass
 
-    # Helper to repair syntax flaws (single quotes, trailing commas, python booleans)
+    # Helper to repair syntax flaws (single quotes, trailing commas, unquoted keys, python booleans)
     def try_repair_and_load(s):
         s_clean = s.strip()
         try:
@@ -387,7 +392,10 @@ def robust_clean_json(text):
                 return json.loads(s_quotes), s_quotes
             except Exception:
                 pass
-        s_quotes = re.sub(r"\'([a-zA-Z0-9_]+)\'\s*:", r'"\1":', s_fixed)
+        # Fix unquoted keys e.g. {action: "tap", coordinate: [100, 200]}
+        s_unquoted = re.sub(r'(?<=[{,\s])([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'"\1":', s_fixed)
+        # Fix single quoted keys / values
+        s_quotes = re.sub(r"\'([a-zA-Z0-9_]+)\'\s*:", r'"\1":', s_unquoted)
         s_quotes = re.sub(r":\s*\'([^\']*?)\'", r': "\1"', s_quotes)
         s_quotes = re.sub(r',\s*([}\]])', r'\1', s_quotes)
         try:
@@ -396,7 +404,7 @@ def robust_clean_json(text):
             pass
         return None, None
 
-    # 4. Search for { ... } blocks
+    # 5. Search for { ... } blocks
     start_indices = [i for i, c in enumerate(text_stripped) if c == '{']
     end_indices = [i for i, c in enumerate(text_stripped) if c == '}']
 
@@ -404,7 +412,7 @@ def robust_clean_json(text):
         # Check outermost candidate
         candidate = text_stripped[start_indices[0]:end_indices[-1] + 1].strip()
         parsed, repaired = try_repair_and_load(candidate)
-        if parsed is not None:
+        if parsed is not None and isinstance(parsed, dict):
             return repaired
 
         # Check individual pairs, prioritizing blocks with "action" or "coordinate"
@@ -414,19 +422,40 @@ def robust_clean_json(text):
                     cand = text_stripped[si:ei + 1].strip()
                     if "action" in cand.lower() or "coordinate" in cand.lower():
                         parsed, repaired = try_repair_and_load(cand)
-                        if parsed is not None:
+                        if parsed is not None and isinstance(parsed, dict):
                             return repaired
 
-    # 5. Fallback synthesized JSON for phone control agents (tap, click, type, swipe, back, home)
-    tap_match = re.search(r'(?:tap|click|touch)\s*(?:at|on|coordinate)?\s*[:=\s]*\[?\s*(\d{1,5})\s*[,x\s]\s*(\d{1,5})\s*\]?', text_stripped, re.IGNORECASE)
-    if tap_match:
-        x, y = int(tap_match.group(1)), int(tap_match.group(2))
-        return json.dumps({"action": "tap", "coordinate": [x, y]})
+    # 6. Function-calling formats: tap(x, y), click(x=..., y=...), tap([x, y]), type("...")
+    fn_tap = re.search(r'(?:tap|click|touch)\s*\(\s*(?:\[|\()?x?\s*[:=]?\s*(\d{1,5})\s*[,x\s]\s*y?\s*[:=]?\s*(\d{1,5})\s*(?:\]|\))?\s*\)', text_stripped, re.IGNORECASE)
+    if fn_tap:
+        return json.dumps({"action": "tap", "coordinate": [int(fn_tap.group(1)), int(fn_tap.group(2))]})
 
-    type_match = re.search(r'(?:type|input|write)\s*[:=\s]*["\'](.*?)["\']', text_stripped, re.IGNORECASE)
-    if type_match:
-        return json.dumps({"action": "type", "text": type_match.group(1)})
+    fn_type = re.search(r'(?:type|input|write)\s*\(\s*(?:text\s*[:=]\s*)?["\'](.*?)["\']\s*\)', text_stripped, re.IGNORECASE)
+    if fn_type:
+        return json.dumps({"action": "type", "text": fn_type.group(1)})
 
+    fn_swipe = re.search(r'swipe\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', text_stripped, re.IGNORECASE)
+    if fn_swipe:
+        return json.dumps({
+            "action": "swipe",
+            "start": [int(fn_swipe.group(1)), int(fn_swipe.group(2))],
+            "end": [int(fn_swipe.group(3)), int(fn_swipe.group(4))]
+        })
+
+    # 7. Key-Value formats (e.g. Action: click\nTarget: YouTube\nCoordinates: 608, 470)
+    kv_action = re.search(r'(?:action|action_type)\s*[:=]\s*([a-zA-Z_]+)', text_stripped, re.IGNORECASE)
+    kv_coords = re.search(r'(?:coordinate|coordinates|location|point|at)\s*[:=]?\s*\[?\(?(?:x\s*[:=]\s*)?(\d{1,5})\s*[,x\s]\s*(?:y\s*[:=]\s*)?(\d{1,5})\s*\]?\)?', text_stripped, re.IGNORECASE)
+    kv_target = re.search(r'(?:target|element|button|app|item)\s*[:=]\s*["\']?([^"\',\n]+)["\']?', text_stripped, re.IGNORECASE)
+    if kv_action:
+        act = kv_action.group(1).lower()
+        res_obj = {"action": "tap" if act in ("click", "touch", "press") else act}
+        if kv_coords:
+            res_obj["coordinate"] = [int(kv_coords.group(1)), int(kv_coords.group(2))]
+        if kv_target:
+            res_obj["target"] = kv_target.group(1).strip()
+        return json.dumps(res_obj)
+
+    # 8. Swipe / Scroll
     swipe_match = re.search(r'swipe\s*(?:from)?\s*\[?(\d+),\s*(\d+)\]?\s*(?:to)?\s*\[?(\d+),\s*(\d+)\]?', text_stripped, re.IGNORECASE)
     if swipe_match:
         return json.dumps({
@@ -435,23 +464,69 @@ def robust_clean_json(text):
             "end": [int(swipe_match.group(3)), int(swipe_match.group(4))]
         })
 
-    if re.search(r'\b(press|go)\s+back\b', text_stripped, re.IGNORECASE):
+    scroll_match = re.search(r'\b(scroll|swipe)\s+(up|down|left|right)\b', text_stripped, re.IGNORECASE)
+    if scroll_match:
+        return json.dumps({"action": "swipe", "direction": scroll_match.group(2).lower()})
+
+    # 9. Type / Input text
+    type_match = re.search(r'(?:type|input|write)\s*[:=\s]*["\'](.*?)["\']', text_stripped, re.IGNORECASE)
+    if type_match:
+        return json.dumps({"action": "type", "text": type_match.group(1)})
+
+    # 10. Navigation keys (back, home, enter, menu)
+    if re.search(r'\b(press|go)\s+back\b', text_stripped, re.IGNORECASE) or text_stripped.lower() in ("back", "go back"):
         return json.dumps({"action": "back"})
-    if re.search(r'\b(press|go)\s+home\b', text_stripped, re.IGNORECASE):
+    if re.search(r'\b(press|go)\s+home\b', text_stripped, re.IGNORECASE) or text_stripped.lower() in ("home", "go home"):
         return json.dumps({"action": "home"})
 
-    # 6. Search for [ ... ] blocks if not an action sentence
+    # 11. Natural language with coordinates: (tap/click/touch ... [x, y] or (x, y) or x: ..., y: ...)
+    action_verb = re.search(r'\b(tap|click|touch|press)\b', text_stripped, re.IGNORECASE)
+    coords_match = re.search(r'(?:\[|\(|\bx\s*[:=]\s*)(\d{1,5})\s*[,x\s]\s*(?:y\s*[:=]\s*)?(\d{1,5})(?:\]|\)|\b)', text_stripped, re.IGNORECASE)
+    if not coords_match:
+        coords_match = re.search(r'(?:at|point|coordinates?|location)\s*[:=]?\s*(?:x\s*[:=]\s*)?(\d{1,5})\s*[,x\s]\s*(?:y\s*[:=]\s*)?(\d{1,5})', text_stripped, re.IGNORECASE)
+
+    if coords_match:
+        x, y = int(coords_match.group(1)), int(coords_match.group(2))
+        act_name = "tap"
+        if action_verb:
+            v = action_verb.group(1).lower()
+            act_name = "tap" if v in ("click", "touch", "press") else v
+        res = {"action": act_name, "coordinate": [x, y]}
+        target_m = re.search(r'(?:on|the|tap|click)\s+(?:the\s+)?([A-Za-z0-9_-]+)(?:\s+(?:app|icon|button))?', text_stripped, re.IGNORECASE)
+        if target_m:
+            candidate_tgt = target_m.group(1).strip()
+            if candidate_tgt.lower() not in ("on", "at", "the", "a", "an", "screen", "point", "coordinate", "coordinates", "icon", "app", "button", "tap", "click"):
+                res["target"] = candidate_tgt
+        return json.dumps(res)
+
+    # 12. Actions without coordinates (e.g. "Click on YouTube", "Tap YouTube icon", "Open Settings")
+    target_match = re.search(r'\b(?:tap|click|touch|open|select)\s+(?:on\s+)?(?:the\s+)?([A-Za-z0-9_-]+)(?:\s+(?:app|icon|button))?\b', text_stripped, re.IGNORECASE)
+    if target_match:
+        tgt = target_match.group(1)
+        if tgt.lower() not in ("on", "at", "the", "a", "an", "screen", "point", "it", "this", "that"):
+            return json.dumps({"action": "tap", "target": tgt, "element": tgt})
+
+    # 13. Search for [ ... ] blocks if not an action sentence
     first_bracket = text_stripped.find("[")
     last_bracket = text_stripped.rfind("]")
     if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
         candidate = text_stripped[first_bracket:last_bracket + 1].strip()
         parsed, repaired = try_repair_and_load(candidate)
         if parsed is not None:
+            if isinstance(parsed, list) and len(parsed) == 2 and all(isinstance(n, (int, float)) for n in parsed):
+                return json.dumps({"action": "tap", "coordinate": [int(parsed[0]), int(parsed[1])]})
             return repaired
+
+    # 14. If strictly enforcing action JSON and all above failed
+    if enforce_action_json:
+        return json.dumps({
+            "action": "tap",
+            "description": text_stripped[:120] if text_stripped else "Autonomous tap action"
+        })
 
     return text_stripped
 
-def is_json_or_action_request(payload):
+def is_json_or_action_request(payload, has_images=False):
     """
     Check if the client or agent requested JSON output or is an autonomous phone-control agent.
     If true, Phone as GPU will enforce JSON grammar on llama-server and sanitize the output.
@@ -480,15 +555,16 @@ def is_json_or_action_request(payload):
     joined = " ".join(text_corpus)
     if any(phrase in joined for phrase in [
         "action json", "json object", "output json", "return json",
-        "json only", "valid json", "format: json", "as json"
+        "json only", "valid json", "format: json", "as json", "json",
+        "response in json", "json schema"
     ]):
         return True
 
-    action_terms = ["action", "coordinate", "tap", "click", "swipe", "bounds", "screenshot", "point"]
+    action_terms = ["action", "coordinate", "coordinates", "tap", "click", "swipe", "bounds", "screenshot", "point", "touch", "target", "ui", "screen", "button", "icon"]
     matches = sum(1 for term in action_terms if term in joined)
-    if matches >= 2 and "json" in joined:
+    if matches >= 2:
         return True
-    if matches >= 3:
+    if has_images and matches >= 1:
         return True
     return False
 
@@ -1221,6 +1297,18 @@ class RequestHandler(BaseHTTPRequestHandler):
         clean_path = path.rstrip("/") if path != "/" else "/"
 
         if clean_path in ("/", "/index.html"):
+            server_port = self.server.server_address[1]
+            accept_hdr = self.headers.get("Accept", "").lower()
+            user_agent = self.headers.get("User-Agent", "").lower()
+            # If request is on Ollama port (11434) and client expects plain text or isn't asking for HTML:
+            if server_port == 11434 and ("text/html" not in accept_hdr or "ollama" in user_agent):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b"Ollama is running")
+                return
+
             index_path = os.path.join(WEB_DIR, "index.html")
             if os.path.isfile(index_path):
                 with open(index_path, "rb") as f:
@@ -1416,12 +1504,19 @@ class RequestHandler(BaseHTTPRequestHandler):
                 active_model = current_model_name if loaded else "phone-gpu"
             clean_name = active_model.replace(".gguf", "")
             self.send_json(200, {
+                "license": "Apache-2.0",
+                "modelfile": f"FROM {active_model}",
+                "parameters": "stop \"<|im_end|>\"",
+                "template": "{{ if .System }}<|im_start|>system\n{{ .System }}<|im_end|>\n{{ end }}{{ if .Prompt }}<|im_start|>user\n{{ .Prompt }}<|im_end|>\n<|im_start|>assistant\n{{ end }}",
                 "details": {
+                    "parent_model": "",
                     "format": "gguf",
                     "family": "lfm" if "lfm" in clean_name.lower() else "llama",
+                    "families": ["lfm" if "lfm" in clean_name.lower() else "llama"],
                     "parameter_size": "2B",
                     "quantization_level": "Q4_K_M"
-                }
+                },
+                "capabilities": ["vision", "tools"]
             })
             return
 
@@ -1495,8 +1590,31 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"status": "started", "destination": dest})
             return
 
+        elif clean_path == "/api/show":
+            with state_lock:
+                loaded = (llama_process is not None and llama_process.poll() is None)
+                active_model = current_model_name if loaded else "phone-gpu"
+            clean_name = active_model.replace(".gguf", "")
+            self.send_json(200, {
+                "license": "Apache-2.0",
+                "modelfile": f"FROM {active_model}",
+                "parameters": "stop \"<|im_end|>\"",
+                "template": "{{ if .System }}<|im_start|>system\n{{ .System }}<|im_end|>\n{{ end }}{{ if .Prompt }}<|im_start|>user\n{{ .Prompt }}<|im_end|>\n<|im_start|>assistant\n{{ end }}",
+                "details": {
+                    "parent_model": "",
+                    "format": "gguf",
+                    "family": "lfm" if "lfm" in clean_name.lower() else "llama",
+                    "families": ["lfm" if "lfm" in clean_name.lower() else "llama"],
+                    "parameter_size": "2B",
+                    "quantization_level": "Q4_K_M"
+                },
+                "capabilities": ["vision", "tools"]
+            })
+            return
+
         elif clean_path in (
             "/v1/chat/completions", "/chat/completions",
+            "/api/v1/chat/completions", "/api/chat/completions",
             "/v1/completions", "/completions",
             "/v1/embeddings", "/embeddings",
             "/api/chat", "/api/generate"
@@ -1504,12 +1622,53 @@ class RequestHandler(BaseHTTPRequestHandler):
             is_ollama_chat = (clean_path == "/api/chat")
             is_ollama_generate = (clean_path == "/api/generate")
             is_stream = bool(payload.get("stream", False))
-            wants_json = is_json_or_action_request(payload)
 
             # Normalize and resolve any multimodal image inputs (Ollama images arrays, raw base64, data URIs, remote URLs)
             payload, has_images = normalize_multimodal_payload(payload)
-            if wants_json and "response_format" not in payload:
-                payload["response_format"] = {"type": "json_object"}
+            wants_json = is_json_or_action_request(payload, has_images=has_images)
+
+            if wants_json:
+                if "response_format" not in payload:
+                    payload["response_format"] = {"type": "json_object"}
+                # Ensure model prompt mentions JSON so grammar sampler does not get stuck
+                messages = payload.get("messages", [])
+                has_json_word = any(
+                    isinstance(m, dict) and "json" in str(m.get("content", "")).lower()
+                    for m in messages
+                )
+                if not has_json_word and messages:
+                    last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+                    if last_user_msg:
+                        c = last_user_msg.get("content")
+                        if isinstance(c, str):
+                            last_user_msg["content"] = c + "\nRespond with a valid JSON action object."
+                        elif isinstance(c, list):
+                            for part in reversed(c):
+                                if isinstance(part, dict) and part.get("type") == "text":
+                                    part["text"] = part.get("text", "") + "\nRespond with a valid JSON action object."
+                                    break
+                            else:
+                                c.append({"type": "text", "text": "Respond with a valid JSON action object."})
+
+            # Clean Ollama-specific fields before proxying to OpenAI endpoint
+            if "format" in payload:
+                del payload["format"]
+            if "prompt" in payload and "messages" in payload:
+                del payload["prompt"]
+            if "images" in payload:
+                del payload["images"]
+            if "image" in payload:
+                del payload["image"]
+            if "options" in payload and isinstance(payload["options"], dict):
+                opts = payload["options"]
+                if "temperature" in opts and "temperature" not in payload:
+                    payload["temperature"] = opts["temperature"]
+                if "top_p" in opts and "top_p" not in payload:
+                    payload["top_p"] = opts["top_p"]
+                if "num_predict" in opts and "max_tokens" not in payload:
+                    payload["max_tokens"] = opts["num_predict"]
+                del payload["options"]
+
             body = json.dumps(payload).encode("utf-8")
 
             # 1. Verify or auto-load model if none currently active
@@ -1637,9 +1796,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                             msg_node = choices[0].get("message")
                             if msg_node and isinstance(msg_node, dict):
                                 content_str = msg_node.get("content", "")
+                                if not content_str and msg_node.get("tool_calls"):
+                                    # Fallback from function/tool call arguments
+                                    try:
+                                        tc = msg_node["tool_calls"][0]
+                                        fn_args = tc.get("function", {}).get("arguments", "")
+                                        fn_name = tc.get("function", {}).get("name", "tap")
+                                        if fn_args:
+                                            content_str = fn_args
+                                        else:
+                                            content_str = json.dumps({"action": fn_name})
+                                    except Exception:
+                                        pass
                                 # Clean JSON output for agents expecting raw action JSON
-                                if wants_json or "{" in content_str or any(kw in content_str.lower() for kw in ["action", "coordinate", "tap", "click"]):
-                                    clean_content = robust_clean_json(content_str)
+                                if wants_json or "{" in content_str or any(kw in content_str.lower() for kw in ["action", "coordinate", "tap", "click", "swipe", "type"]):
+                                    clean_content = robust_clean_json(content_str, enforce_action_json=wants_json)
                                     msg_node["content"] = clean_content
                                     content_str = clean_content
 
@@ -1653,8 +1824,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                                     "content": content_str
                                 },
                                 "done": True,
+                                "done_reason": "stop",
                                 "total_duration": 1200000000,
-                                "load_duration": 1000000
+                                "load_duration": 1000000,
+                                "prompt_eval_count": 25,
+                                "eval_count": 50
                             })
                             return
 
@@ -1664,7 +1838,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                                 "model": payload.get("model", current_model_name or "phone-gpu"),
                                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
                                 "response": content_str,
-                                "done": True
+                                "done": True,
+                                "done_reason": "stop",
+                                "context": [],
+                                "total_duration": 1200000000,
+                                "load_duration": 1000000
                             })
                             return
 
@@ -1693,7 +1871,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                                     except Exception:
                                         pass
 
-                        clean_content = robust_clean_json(accumulated)
+                        clean_content = robust_clean_json(accumulated, enforce_action_json=True)
 
                         if is_ollama_chat:
                             self.send_response(200)
