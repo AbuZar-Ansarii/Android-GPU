@@ -309,10 +309,46 @@ If you are building an AI agent (with **LangChain**, **AutoGen**, **CrewAI**, **
 * **On the Same Phone:** `http://127.0.0.1:8080/v1`
 * **On PC over USB Tunnel:** `http://localhost:8080/v1`
 
-#### How the Engine Handles Vision Payloads:
-1. **Both Base64 & Remote URLs Supported:** Agents can send base64 data URIs (`data:image/jpeg;base64,...`) or remote URLs (`https://example.com/photo.jpg`). The server pre-fetches remote URLs into base64 before passing them to `llama-server`, preventing DNS or SSL failures in mobile environments.
-2. **Dynamic Vision Context Scaling:** When an image is detected, the context buffer automatically scales to 4096+ tokens to accommodate the visual projector tokens (~576–1152 tokens per image) without running out of context.
-3. **Smart Model Auto-Switching:** If a text-only model is currently loaded when an image payload arrives, the backend automatically switches to an available Omni/vision model (e.g. `LFM3-Omni-2B-Q4_K_M.gguf` with `mmproj-LFM3-Omni-2B-f16.gguf`).
+#### How the Engine Handles Vision & Ollama Agent Payloads:
+1. **Full Ollama API & Format Support:** In addition to OpenAI (`/v1/chat/completions`), Android-GPU natively supports Ollama endpoints (`/api/chat`, `/api/generate`, `/api/tags`, `/api/version`).
+2. **Raw Base64 & `"images"` Arrays:** AI agents can send images using Ollama's `"images": ["<raw_base64>"]` array or OpenAI's `{"type": "image_url", ...}` format. Raw base64 strings and remote HTTP/HTTPS URLs are automatically normalized into data URIs.
+3. **Automatic Action JSON Cleaning:** Autonomous phone-controlling agents (which take screenshots to decide where to tap and parse the output with `json.loads`) frequently fail if the model wraps output in markdown code blocks (` ```json ... ``` `) or conversational filler. Android-GPU automatically sanitizes the response, extracting pure, valid JSON so the agent's action parser never crashes.
+4. **Paired Projector Auto-Download:** Multimodal models like Liquid AI LFM3 Omni 2B require both the model weights and the visual projector (`mmproj-LFM3-Omni-2B-F16.gguf`). The engine automatically downloads and mounts the matching projector.
+5. **Dynamic Vision Context Scaling:** When an image is detected, the context buffer automatically scales to 4096+ tokens to accommodate visual projector tokens (~576–1152 tokens per image).
+
+#### Ollama-Style Phone Automation Agent Example (Take Screenshot -> Output Action JSON)
+```python
+import base64
+import requests
+import json
+
+# 1. Take phone screenshot and encode to base64
+with open("phone_screen.png", "rb") as f:
+    screen_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+# 2. Call local endpoint (using Ollama /api/chat or OpenAI /v1/chat/completions)
+url = "http://127.0.0.1:8080/api/chat"
+payload = {
+    "model": "lfm3-omni",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Look at this phone screenshot. Where should I tap to open Settings? Respond ONLY with an action JSON.",
+            "images": [screen_base64]  # Raw base64 supported just like Ollama!
+        }
+    ],
+    "format": "json",
+    "stream": False
+}
+
+resp = requests.post(url, json=payload)
+data = resp.json()
+
+# 3. Clean JSON guaranteed! No markdown code fences or conversational errors:
+action_json = json.loads(data["message"]["content"])
+print("Action JSON parsed successfully:", action_json)
+# Example output: {"action": "tap", "coordinate": [540, 960]}
+```
 
 #### Python AI Agent Example (Multimodal Vision)
 ```python

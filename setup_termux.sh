@@ -602,8 +602,8 @@ if [ "$EXISTING_MODELS" -eq 0 ]; then
         10)
             MODEL_FILE="LFM3-Omni-2B-Q4_K_M.gguf"
             MODEL_URL="https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/LFM3-Omni-2B-Q4_K_M.gguf"
-            MMPROJ_FILE="mmproj-LFM3-Omni-2B-Q4_K_M.gguf"
-            MMPROJ_URL="https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-Q4_K_M.gguf"
+            MMPROJ_FILE="mmproj-LFM3-Omni-2B-F16.gguf"
+            MMPROJ_URL="https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-F16.gguf"
             ;;
         11)
             MODEL_FILE="Llama-3.2-3B-Instruct-Q4_K_M.gguf"
@@ -682,7 +682,7 @@ PY_DL
             MMP_SIZE=$(wc -c < "$MODELS_DIR/$MMPROJ_FILE" 2>/dev/null || echo 0)
             if [ "$MMP_SIZE" -lt 5000000 ]; then
                 python3 - << PY_MMP
-import urllib.request, ssl, sys
+import urllib.request, ssl, shutil, sys
 ctx = ssl._create_unverified_context()
 req = urllib.request.Request("$MMPROJ_URL", headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
 try:

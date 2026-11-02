@@ -1754,6 +1754,7 @@
           <div class="telemetry-pill"><span>🔋 Battery:</span> <span class="val" id="telem-battery">--</span></div>
           <div class="telemetry-pill"><span>🌡️ Temp:</span> <span class="val" id="telem-temp">--</span></div>
           <div class="telemetry-pill"><span>🎮 Engine:</span> <span class="val" id="telem-engine" style="color: var(--crimson);">ARM NEON</span></div>
+          <div class="telemetry-pill"><span>👁️ Vision:</span> <span class="val" id="telem-vision">Text-Only</span></div>
         </div>
 
         <!-- Hardware Acceleration & Performance Engine Box -->
@@ -2013,7 +2014,7 @@
       // 🟡 6GB RAM TIER
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Google Gemma 2 2B IT", size: "~1.6 GB", ramBadge: "6GB RAM", file: "gemma-2-2b-it-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf", desc: "Google's high-intelligence 2B Gemini-derived model" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Liquid AI LFM3 Omni 2B (Q4_K_M)", size: "~1.05 GB", ramBadge: "6GB RAM", file: "LFM3-Omni-2B-Q4_K_M.gguf", url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/LFM3-Omni-2B-Q4_K_M.gguf", desc: "[LIQUID AI] End-to-end Omni-modal model for text, vision & audio offloading" },
-      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Liquid AI LFM3 Omni 2B Projector (Vision/Audio)", size: "~480 MB", ramBadge: "Vision mmproj", file: "mmproj-LFM3-Omni-2B-f16.gguf", url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-f16.gguf", desc: "[MMPROJ] Multimodal vision projector required for LFM3 Omni to inspect images & visual inputs" },
+      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Liquid AI LFM3 Omni 2B Projector (Vision/Audio)", size: "~480 MB", ramBadge: "Vision mmproj", file: "mmproj-LFM3-Omni-2B-F16.gguf", url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-F16.gguf", desc: "[MMPROJ] Multimodal vision projector required for LFM3 Omni to inspect images & visual inputs" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Llama 3.2 3B Instruct", size: "~2.0 GB", ramBadge: "6GB RAM", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", desc: "Recommended sweet-spot for daily chat & writing" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Qwen 2.5 3B Instruct", size: "~2.1 GB", ramBadge: "6GB RAM", file: "qwen2.5-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf", desc: "Exceptional code synthesis & math logic" },
 
@@ -2576,12 +2577,27 @@
           currentModel = data.current_model;
           dot.className = 'status-dot active';
           const cfg = data.config || {};
-          const cfgSummary = cfg.threads ? ` [${cfg.threads}T · ${cfg.kv_quant || 'q8_0'}]` : '';
+          const hasMmproj = Boolean(cfg.mmproj);
+          const cfgSummary = cfg.threads ? ` [${cfg.threads}T · ${cfg.kv_quant || 'q8_0'}${hasMmproj ? ' · 👁️ Vision' : ''}]` : '';
           topbarText.innerText = `${data.current_model}${cfgSummary}`;
           modalActive.innerText = `${data.current_model}${cfgSummary}`;
           modalUnloadBtn.style.display = 'inline-flex';
           sideStatus.innerText = `ACTIVE // ${data.current_model}`;
           sideStatus.style.color = 'var(--crimson)';
+
+          const telemVision = document.getElementById('telem-vision');
+          if (telemVision) {
+            if (hasMmproj) {
+              telemVision.innerText = 'Active (mmproj)';
+              telemVision.style.color = '#10b981';
+            } else if (data.current_model.toLowerCase().includes('omni')) {
+              telemVision.innerText = '⚠️ No mmproj';
+              telemVision.style.color = 'var(--crimson)';
+            } else {
+              telemVision.innerText = 'Text-Only';
+              telemVision.style.color = 'var(--text-dim)';
+            }
+          }
         } else {
           currentModel = null;
           dot.className = 'status-dot';
@@ -2590,6 +2606,11 @@
           modalUnloadBtn.style.display = 'none';
           sideStatus.innerText = 'BUFFER FREE // IDLE';
           sideStatus.style.color = 'var(--text-dim)';
+          const telemVision = document.getElementById('telem-vision');
+          if (telemVision) {
+            telemVision.innerText = 'Text-Only';
+            telemVision.style.color = 'var(--text-dim)';
+          }
         }
       } catch (err) {
         document.getElementById('topbar-model-text').innerText = 'OFFLINE // PROBING...';
@@ -2796,7 +2817,14 @@
         });
 
         if (!response.ok) {
-          throw new Error('Server returned status: ' + response.status);
+          let errDetail = '';
+          try {
+            const errData = await response.json();
+            errDetail = errData.error?.message || errData.error || errData.message || JSON.stringify(errData);
+          } catch(e) {
+            errDetail = 'Server returned status: ' + response.status;
+          }
+          throw new Error(errDetail);
         }
 
         const reader = response.body.getReader();
@@ -2883,7 +2911,7 @@
         if (err.name === 'AbortError') {
           contentEl.innerHTML += '<p style="color: var(--text-dim); font-size: 0.78rem; margin-top: 6px; font-family: monospace;">[EXECUTION HALTED]</p>';
         } else {
-          contentEl.innerHTML = `<p style="color: var(--crimson); font-size: 0.85rem;">Error: ${err.message}. Is a model loaded in RAM?</p>`;
+          contentEl.innerHTML = `<p style="color: var(--crimson); font-size: 0.85rem; line-height: 1.45;"><b>Execution Error:</b> ${escapeHtml(err.message)}</p>`;
         }
       } finally {
         stopThinking();

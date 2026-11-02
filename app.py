@@ -186,94 +186,257 @@ def get_binary_features(binary_path):
     _binary_features_cache[binary_path] = features
     return features
 
+# Paired multimodal projectors for vision models (auto-downloaded if model is fetched)
+PAIRED_PROJECTORS = {
+    "lfm3-omni": {
+        "filename": "mmproj-LFM3-Omni-2B-F16.gguf",
+        "url": "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-F16.gguf"
+    },
+    "lfm3-omni-2b": {
+        "filename": "mmproj-LFM3-Omni-2B-F16.gguf",
+        "url": "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-F16.gguf"
+    }
+}
+
 def find_matching_mmproj(model_path):
     """
-    Find matching multimodal projector (mmproj-*.gguf) for vision/omni/audio models
-    in the same directory or the models directory (e.g. LFM3 Omni, LLaVA, MiniCPM).
+    Find matching multimodal projector (mmproj-*.gguf) for vision/omni/audio models.
+    Searches model directory, internal models directory, and all phone download directories.
     """
     if not model_path:
         return None
     model_dir = os.path.dirname(os.path.abspath(model_path))
     model_base = os.path.basename(model_path)
     model_stem = os.path.splitext(model_base)[0].lower()
-    
-    # 1. Direct candidate: mmproj-<model_filename>
-    direct_candidates = [
-        os.path.join(model_dir, f"mmproj-{model_base}"),
-        os.path.join(MODELS_DIR, f"mmproj-{model_base}"),
-        os.path.join(model_dir, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-")),
-        os.path.join(MODELS_DIR, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-"))
-    ]
-    for c in direct_candidates:
-        if os.path.isfile(c):
-            return c
 
-    # 2. Check all files in model_dir and MODELS_DIR starting with mmproj
-    for sdir in [model_dir, MODELS_DIR]:
-        if os.path.isdir(sdir):
-            try:
-                for f in os.listdir(sdir):
-                    fl = f.lower()
-                    if fl.startswith("mmproj") and fl.endswith(".gguf"):
-                        # Match family keywords
-                        if any(kw in model_stem and kw in fl for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio"]):
-                            return os.path.join(sdir, f)
-            except Exception:
-                pass
+    search_dirs = [
+        model_dir,
+        MODELS_DIR,
+        "/sdcard/Download",
+        "/sdcard/Downloads",
+        "/storage/emulated/0/Download",
+        "/storage/emulated/0/Downloads",
+        os.path.expanduser("~/storage/downloads"),
+        os.path.expanduser("~/storage/shared/Download")
+    ]
+    seen_dirs = set()
+    valid_dirs = []
+    for d in search_dirs:
+        if d and os.path.isdir(d):
+            rp = os.path.realpath(d)
+            if rp not in seen_dirs:
+                seen_dirs.add(rp)
+                valid_dirs.append(d)
+
+    # 1. Direct name variations for LFM3 Omni
+    if "lfm3" in model_stem and "omni" in model_stem:
+        for sdir in valid_dirs:
+            for fname in [
+                "mmproj-LFM3-Omni-2B-F16.gguf",
+                "mmproj-LFM3-Omni-2B-f16.gguf",
+                "mmproj-LFM3-Omni-2B-Q4_K_M.gguf",
+                "mmproj-LFM3-Omni-2B.gguf"
+            ]:
+                p = os.path.join(sdir, fname)
+                if os.path.isfile(p):
+                    return p
+
+    # 2. Direct candidate: mmproj-<model_filename>
+    for sdir in valid_dirs:
+        for c in [
+            os.path.join(sdir, f"mmproj-{model_base}"),
+            os.path.join(sdir, model_base.replace("LFM3-Omni-2B-", "mmproj-LFM3-Omni-2B-")),
+            os.path.join(sdir, "mmproj-model-f16.gguf"),
+            os.path.join(sdir, "mmproj-model-q4_0.gguf")
+        ]:
+            if os.path.isfile(c):
+                return c
+
+    # 3. Check all files in valid directories starting with mmproj
+    for sdir in valid_dirs:
+        try:
+            for f in os.listdir(sdir):
+                fl = f.lower()
+                if fl.startswith("mmproj") and fl.endswith(".gguf"):
+                    # Match family keywords
+                    if any(kw in model_stem and kw in fl for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio", "moondream", "smolvlm", "qwen"]):
+                        return os.path.join(sdir, f)
+                    if any(kw in model_stem for kw in ["omni", "vision", "vl"]):
+                        return os.path.join(sdir, f)
+        except Exception:
+            pass
     return None
 
 def resolve_image_url_to_base64(url):
     """
-    Resolve remote HTTP/HTTPS image URL to a self-contained base64 data URI.
-    Ensures llama-server on Android/Termux does not fail if external outbound network
-    or SSL verification is restricted.
+    Resolve remote HTTP/HTTPS image URL or raw base64 string to a standardized data URI.
+    Ensures llama-server on Android/Termux processes images reliably without network lookup failures.
     """
     if not url or not isinstance(url, str):
         return url
+    url = url.strip()
     if url.startswith("data:"):
         return url
-    if url.startswith("http://") or url.startswith("https://"):
+    # If raw base64 string without data: prefix
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return f"data:image/jpeg;base64,{url}"
+    # Remote HTTP/HTTPS URL: pre-fetch to base64
+    try:
+        ctx = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={"User-Agent": "PhoneAsGPU/2.0 (Multimodal Agent)"})
+        with urllib.request.urlopen(req, context=ctx, timeout=12) as resp:
+            content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            if not content_type.startswith("image/"):
+                content_type = "image/jpeg"
+            img_bytes = resp.read()
+            b64_str = base64.b64encode(img_bytes).decode("utf-8")
+            return f"data:{content_type};base64,{b64_str}"
+    except Exception as e:
+        print(f"[!] Warning: Could not pre-fetch remote image URL {url}: {e}")
+        return url
+
+def extract_clean_json(text):
+    """
+    Sanitize AI response to extract pure parseable JSON.
+    Essential for autonomous phone/screen control agents where json.loads() fails
+    if the model wrapped JSON in markdown code fences (```json ... ```) or conversational intro.
+    """
+    if not text or not isinstance(text, str):
+        return text
+    text_stripped = text.strip()
+
+    # 1. Strip markdown code fences ```json ... ``` or ``` ... ```
+    if text_stripped.startswith("```"):
+        lines = text_stripped.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text_stripped = "\n".join(lines).strip()
+
+    # 2. Check if text_stripped is directly valid JSON
+    try:
+        json.loads(text_stripped)
+        return text_stripped
+    except Exception:
+        pass
+
+    # 3. Search for outermost JSON object { ... }
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidate = text[first_brace:last_brace + 1].strip()
         try:
-            ctx = ssl._create_unverified_context()
-            req = urllib.request.Request(url, headers={"User-Agent": "PhoneAsGPU/2.0 (Multimodal Agent)"})
-            with urllib.request.urlopen(req, context=ctx, timeout=12) as resp:
-                content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
-                if not content_type.startswith("image/"):
-                    content_type = "image/jpeg"
-                img_bytes = resp.read()
-                b64_str = base64.b64encode(img_bytes).decode("utf-8")
-                return f"data:{content_type};base64,{b64_str}"
-        except Exception as e:
-            print(f"[!] Warning: Could not pre-fetch remote image URL {url}: {e}")
-            return url
-    return url
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    # 4. Search for outermost JSON array [ ... ]
+    first_bracket = text.find("[")
+    last_bracket = text.rfind("]")
+    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+        candidate = text[first_bracket:last_bracket + 1].strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+
+    return text_stripped
 
 def normalize_multimodal_payload(payload):
     """
-    Scan OpenAI messages in payload for vision / image_url content items.
-    Converts any remote HTTP URLs to base64 data URIs so llama-server can process
-    them offline and reliably. Returns (modified_payload, has_images).
+    Scan payload for vision / image inputs from:
+    1. Standard OpenAI format: content=[{"type": "image_url", "image_url": {"url": "..."}}]
+    2. Ollama message format: msg["images"] = ["<base64>", ...] or msg["image"] = "<base64>"
+    3. Ollama root format: payload["images"] = ["<base64>", ...] or payload["image"] = "<base64>"
+    
+    Converts raw base64 and remote URLs to standardized data:image/...;base64 URIs
+    and ensures llama-server receives OpenAI-compliant image_url objects.
+    Returns (modified_payload, has_images).
     """
     if not isinstance(payload, dict):
         return payload, False
+
+    has_images = False
+
+    # Check for root-level images (Ollama /api/generate or /api/chat)
+    root_images = []
+    if "images" in payload and isinstance(payload["images"], list):
+        root_images.extend(payload["images"])
+    elif "image" in payload and isinstance(payload["image"], str):
+        root_images.append(payload["image"])
+
+    # If payload is /api/generate style (has 'prompt' but no 'messages')
+    if "prompt" in payload and "messages" not in payload:
+        prompt_text = payload.get("prompt", "")
+        payload["messages"] = [{"role": "user", "content": prompt_text}]
+
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return payload, False
 
-    has_images = False
-    for msg in messages:
+    for idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             continue
+
+        # Check message-level images (Ollama style)
+        msg_images = []
+        if "images" in msg and isinstance(msg["images"], list):
+            msg_images.extend(msg["images"])
+            del msg["images"]
+        elif "image" in msg and isinstance(msg["image"], str):
+            msg_images.append(msg["image"])
+            del msg["image"]
+
+        # If this is the last user message, attach any root-level images
+        if root_images and msg.get("role") == "user" and idx == len(messages) - 1:
+            msg_images.extend(root_images)
+            root_images = []
+
         content = msg.get("content")
-        if isinstance(content, list):
+
+        # Normalize content to list of parts if images are present
+        if msg_images:
+            has_images = True
+            parts = []
+            if isinstance(content, str) and content:
+                parts.append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                parts.extend(content)
+
+            for img_item in msg_images:
+                if not isinstance(img_item, str) or not img_item.strip():
+                    continue
+                url = resolve_image_url_to_base64(img_item)
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": url}
+                })
+            msg["content"] = parts
+        elif isinstance(content, list):
+            # OpenAI format: inspect existing parts
+            new_parts = []
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "image_url":
                     has_images = True
                     img_data = part.get("image_url")
+                    url = ""
                     if isinstance(img_data, dict) and "url" in img_data:
-                        img_data["url"] = resolve_image_url_to_base64(img_data["url"])
+                        url = img_data["url"]
                     elif isinstance(img_data, str):
-                        part["image_url"] = {"url": resolve_image_url_to_base64(img_data)}
+                        url = img_data
+                    if url:
+                        url = resolve_image_url_to_base64(url)
+                    new_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": url}
+                    })
+                else:
+                    new_parts.append(part)
+            msg["content"] = new_parts
+
     return payload, has_images
 
 def detect_cpu_topology():
@@ -751,11 +914,52 @@ def download_worker(url, dest_path):
                     download_state["speed"] = f"{speed_mb:.1f} MB/s"
 
         download_state["percent"] = 100.0
+
+        # Check if downloaded model has a paired multimodal projector (e.g. LFM3 Omni)
+        base_name_lower = os.path.basename(dest_path).lower()
+        paired_mmproj = None
+        for pkey, pinfo in PAIRED_PROJECTORS.items():
+            if pkey in base_name_lower and not base_name_lower.startswith("mmproj"):
+                proj_file = pinfo["filename"]
+                proj_url = pinfo["url"]
+                proj_dest = os.path.join(MODELS_DIR, proj_file)
+                if not os.path.isfile(proj_dest) and not find_matching_mmproj(dest_path):
+                    print(f"[*] Auto-fetching paired visual projector: {proj_file}...")
+                    download_state["model"] = f"{proj_file} (Vision Projector)"
+                    download_state["percent"] = 0.0
+                    try:
+                        req_p = urllib.request.Request(proj_url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
+                        with urllib.request.urlopen(req_p, context=ctx) as p_resp, open(proj_dest, "wb") as pf:
+                            p_len = p_resp.headers.get("Content-Length")
+                            p_total = int(p_len) if p_len else 0
+                            p_dl = 0
+                            p_start = time.time()
+                            while True:
+                                chunk = p_resp.read(1024 * 512)
+                                if not chunk:
+                                    break
+                                pf.write(chunk)
+                                p_dl += len(chunk)
+                                if p_total > 0:
+                                    pct = (p_dl / p_total) * 100.0
+                                    elapsed = max(0.1, time.time() - p_start)
+                                    speed_mb = (p_dl / (1024 * 1024)) / elapsed
+                                    download_state["percent"] = pct
+                                    download_state["speed"] = f"{speed_mb:.1f} MB/s"
+                            download_state["percent"] = 100.0
+                            print(f"[✓] Successfully downloaded paired projector: {proj_file}")
+                            paired_mmproj = proj_dest
+                    except Exception as pe:
+                        print(f"[!] Warning: Could not auto-download projector {proj_file}: {pe}")
+                elif os.path.isfile(proj_dest):
+                    paired_mmproj = proj_dest
+                break
+
         # Automatically load downloaded weights if no model is currently running
         if llama_process is None or llama_process.poll() is not None:
             print(f"[*] Auto-mounting freshly downloaded weights: {os.path.basename(dest_path)}")
             try:
-                start_llama_server(dest_path)
+                start_llama_server(dest_path, mmproj_path=paired_mmproj)
             except Exception as e:
                 print(f"[!] Auto-mount failed: {e}")
     except Exception as e:
@@ -925,6 +1129,74 @@ class RequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        elif clean_path in ("/api/tags", "/tags"):
+            with state_lock:
+                loaded = (llama_process is not None and llama_process.poll() is None)
+                active_model = current_model_name if loaded else None
+
+            scanned = scan_models(include_downloads=True)
+            models_list = []
+            seen = set()
+
+            if active_model:
+                clean_name = active_model.replace(".gguf", "")
+                models_list.append({
+                    "name": f"{clean_name}:latest",
+                    "model": f"{clean_name}:latest",
+                    "modified_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                    "size": 1024 * 1024 * 1024,
+                    "digest": "sha256:phonegpu",
+                    "details": {
+                        "format": "gguf",
+                        "family": "lfm" if "lfm" in clean_name.lower() else "llama",
+                        "parameter_size": "2B",
+                        "quantization_level": "Q4_K_M"
+                    }
+                })
+                seen.add(active_model)
+
+            for m in scanned:
+                m_name = m["name"]
+                if m_name in seen:
+                    continue
+                clean_name = m_name.replace(".gguf", "")
+                models_list.append({
+                    "name": f"{clean_name}:latest",
+                    "model": f"{clean_name}:latest",
+                    "modified_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                    "size": 1024 * 1024 * 1024,
+                    "digest": "sha256:phonegpu",
+                    "details": {
+                        "format": "gguf",
+                        "family": "lfm" if "lfm" in clean_name.lower() else "llama",
+                        "parameter_size": "2B",
+                        "quantization_level": "Q4_K_M"
+                    }
+                })
+                seen.add(m_name)
+
+            self.send_json(200, {"models": models_list})
+            return
+
+        elif clean_path in ("/api/version", "/version"):
+            self.send_json(200, {"version": "0.5.7"})
+            return
+
+        elif clean_path == "/api/show":
+            with state_lock:
+                loaded = (llama_process is not None and llama_process.poll() is None)
+                active_model = current_model_name if loaded else "phone-gpu"
+            clean_name = active_model.replace(".gguf", "")
+            self.send_json(200, {
+                "details": {
+                    "format": "gguf",
+                    "family": "lfm" if "lfm" in clean_name.lower() else "llama",
+                    "parameter_size": "2B",
+                    "quantization_level": "Q4_K_M"
+                }
+            })
+            return
+
         self.send_error(404, "Not Found")
 
     def do_POST(self):
@@ -996,58 +1268,112 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif clean_path in (
             "/v1/chat/completions", "/chat/completions",
             "/v1/completions", "/completions",
-            "/v1/embeddings", "/embeddings"
+            "/v1/embeddings", "/embeddings",
+            "/api/chat", "/api/generate"
         ):
-            # Normalize and resolve any multimodal image inputs (AI agents passing remote URLs or base64 data URIs)
+            is_ollama_chat = (clean_path == "/api/chat")
+            is_ollama_generate = (clean_path == "/api/generate")
+            is_stream = bool(payload.get("stream", False))
+            wants_json = bool(
+                payload.get("format") == "json"
+                or (isinstance(payload.get("response_format"), dict) and payload.get("response_format", {}).get("type") == "json_object")
+            )
+
+            # Normalize and resolve any multimodal image inputs (Ollama images arrays, raw base64, data URIs, remote URLs)
             payload, has_images = normalize_multimodal_payload(payload)
+            if wants_json and "response_format" not in payload:
+                payload["response_format"] = {"type": "json_object"}
             body = json.dumps(payload).encode("utf-8")
 
-            # 1. Verify or auto-load model if none currently active, or switch to multimodal model if images provided
+            # 1. Verify or auto-load model if none currently active
             with state_lock:
                 loaded = (llama_process is not None and llama_process.poll() is None)
                 active_has_mmproj = bool(active_runtime_config.get("mmproj"))
+                active_path = current_model_path
 
-            # Auto-mount model if not loaded OR switch to multimodal model if images provided but current model is text-only
-            if not loaded or (has_images and not active_has_mmproj):
-                req_model = payload.get("model") if isinstance(payload, dict) else None
+            if not loaded:
                 available = scan_models(include_downloads=True)
+                if not available:
+                    self.send_json(400, {
+                        "error": {
+                            "message": "No model loaded on phone. Please load or download a model first from the Web UI.",
+                            "type": "invalid_request_error",
+                            "code": "model_not_found"
+                        }
+                    })
+                    return
+                req_model = payload.get("model") if isinstance(payload, dict) else None
                 target_path = None
-                if available:
-                    if req_model:
-                        for m in available:
-                            if req_model.lower() in m["name"].lower() or req_model.lower() in m["path"].lower():
-                                target_path = m["path"]
-                                break
-                    # If request has images and no specific vision model was matched, find an omni/vision model
-                    if (not target_path or not active_has_mmproj) and has_images:
-                        for m in available:
-                            if any(k in m["name"].lower() for k in ["omni", "vl", "vision", "llava"]):
-                                target_path = m["path"]
-                                break
-                    if not target_path:
-                        target_path = available[0]["path"]
-                    
-                    reason = "multimodal vision input" if has_images else "incoming OpenAI API request"
-                    print(f"[*] Auto-loading model for {reason}: {os.path.basename(target_path)}")
-                    try:
-                        start_llama_server(target_path, ctx_size=4096 if has_images else 2048)
-                        with state_lock:
-                            loaded = (llama_process is not None and llama_process.poll() is None)
-                    except Exception as e:
-                        print(f"[!] Auto-load failed: {e}")
+                if req_model:
+                    for m in available:
+                        if req_model.lower() in m["name"].lower():
+                            target_path = m["path"]
+                            break
+                if not target_path:
+                    target_path = available[0]["path"]
+
+                mm_proj = find_matching_mmproj(target_path) if has_images else None
+                try:
+                    start_llama_server(target_path, mmproj_path=mm_proj, ctx_size=4096 if has_images else 2048)
+                    with state_lock:
+                        loaded = (llama_process is not None and llama_process.poll() is None)
+                        active_has_mmproj = bool(active_runtime_config.get("mmproj"))
+                        active_path = current_model_path
+                except Exception as e:
+                    print(f"[!] Auto-load error: {e}")
 
             if not loaded:
                 self.send_json(400, {
                     "error": {
-                        "message": "No model loaded on phone. Please load or download a model first from the Web UI.",
+                        "message": "No model currently loaded in phone RAM. Please load a model from the Models tab.",
                         "type": "invalid_request_error",
                         "code": "model_not_found"
                     }
                 })
                 return
 
-            # 2. Normalize destination route for llama-server
-            if clean_path in ("/v1/chat/completions", "/chat/completions"):
+            # 2. If request contains visual media but running model lacks multimodal projector
+            if has_images and not active_has_mmproj:
+                mm_proj = find_matching_mmproj(active_path)
+                if mm_proj:
+                    print(f"[*] Multimodal media provided: Mounting visual projector {os.path.basename(mm_proj)}...")
+                    try:
+                        start_llama_server(active_path, mmproj_path=mm_proj, ctx_size=4096)
+                        with state_lock:
+                            active_has_mmproj = bool(active_runtime_config.get("mmproj"))
+                    except Exception as e:
+                        print(f"[!] Projector mount error: {e}")
+                else:
+                    # Search for any other installed model that has a paired mmproj
+                    available = scan_models(include_downloads=True)
+                    switched = False
+                    for m in available:
+                        mp = find_matching_mmproj(m["path"])
+                        if mp:
+                            print(f"[*] Auto-switching to multimodal model {m['name']} with {os.path.basename(mp)}...")
+                            try:
+                                start_llama_server(m["path"], mmproj_path=mp, ctx_size=4096)
+                                switched = True
+                                break
+                            except Exception:
+                                pass
+                    if not switched:
+                        model_disp = os.path.basename(active_path) if active_path else "Loaded model"
+                        self.send_json(400, {
+                            "error": {
+                                "message": (
+                                    f"Vision Projector Missing: Model '{model_disp}' cannot analyze images without its "
+                                    f"multimodal projector (mmproj-LFM3-Omni-2B-F16.gguf). "
+                                    f"Please download the projector from the Models tab in the Web UI."
+                                ),
+                                "type": "missing_projector_error",
+                                "code": "mmproj_missing"
+                            }
+                        })
+                        return
+
+            # 3. Determine proxy route for llama-server
+            if is_ollama_chat or is_ollama_generate or clean_path in ("/v1/chat/completions", "/chat/completions"):
                 proxy_subpath = "/v1/chat/completions"
             elif clean_path in ("/v1/completions", "/completions"):
                 proxy_subpath = "/v1/completions"
@@ -1070,45 +1396,123 @@ class RequestHandler(BaseHTTPRequestHandler):
                 )
 
                 with urllib.request.urlopen(req) as resp:
+                    # Non-streaming responses (most AI agents use stream: false to parse action JSON)
+                    if not is_stream:
+                        raw_bytes = resp.read()
+                        try:
+                            resp_json = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+                        except Exception:
+                            resp_json = {}
+
+                        content_str = ""
+                        choices = resp_json.get("choices")
+                        if choices and isinstance(choices, list) and len(choices) > 0:
+                            msg_node = choices[0].get("message")
+                            if msg_node and isinstance(msg_node, dict):
+                                content_str = msg_node.get("content", "")
+                                # Clean JSON output for agents expecting raw action JSON
+                                if wants_json or "{" in content_str or "action" in content_str.lower() or "coordinate" in content_str.lower():
+                                    clean_content = extract_clean_json(content_str)
+                                    msg_node["content"] = clean_content
+                                    content_str = clean_content
+
+                        # If request came from Ollama /api/chat
+                        if is_ollama_chat:
+                            self.send_json(200, {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                                "message": {
+                                    "role": "assistant",
+                                    "content": content_str
+                                },
+                                "done": True,
+                                "total_duration": 1200000000,
+                                "load_duration": 1000000
+                            })
+                            return
+
+                        # If request came from Ollama /api/generate
+                        if is_ollama_generate:
+                            self.send_json(200, {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                                "response": content_str,
+                                "done": True
+                            })
+                            return
+
+                        # OpenAI standard response
+                        self.send_json(200, resp_json)
+                        return
+
+                    # Streaming responses
                     self.send_response(resp.status)
                     is_sse = False
                     for k, v in resp.headers.items():
                         kl = k.lower()
                         if kl == "content-type":
-                            self.send_header(k, v)
+                            if is_ollama_chat or is_ollama_generate:
+                                self.send_header("Content-Type", "application/x-ndjson")
+                            else:
+                                self.send_header(k, v)
                             if "text/event-stream" in v:
                                 is_sse = True
                         elif kl in ("cache-control", "x-accel-buffering", "content-length"):
                             self.send_header(k, v)
-                    
-                    if is_sse:
-                        self.send_header("Cache-Control", "no-cache")
-                        self.send_header("X-Accel-Buffering", "no")
 
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("X-Accel-Buffering", "no")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE, HEAD")
                     self.send_header("Access-Control-Allow-Headers", "*")
                     self.send_header("Access-Control-Allow-Private-Network", "true")
                     self.end_headers()
 
-                    # Stream line-by-line for SSE to preserve chunk integrity
-                    if is_sse:
-                        while True:
-                            line = resp.readline()
-                            if not line:
-                                break
+                    # Stream line-by-line
+                    while True:
+                        line = resp.readline()
+                        if not line:
+                            break
+                        line_str = line.decode("utf-8", errors="replace").strip()
+                        if is_ollama_chat or is_ollama_generate:
+                            if line_str.startswith("data:"):
+                                data_part = line_str[5:].strip()
+                                if data_part == "[DONE]":
+                                    fin_chunk = {"model": payload.get("model", current_model_name or "phone-gpu"), "done": True}
+                                    if is_ollama_chat:
+                                        fin_chunk["message"] = {"role": "assistant", "content": ""}
+                                    else:
+                                        fin_chunk["response"] = ""
+                                    self.wfile.write((json.dumps(fin_chunk) + "\n").encode("utf-8"))
+                                    self.wfile.flush()
+                                else:
+                                    try:
+                                        c_data = json.loads(data_part)
+                                        delta = c_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                        if delta:
+                                            chunk_out = {"model": payload.get("model", current_model_name or "phone-gpu"), "done": False}
+                                            if is_ollama_chat:
+                                                chunk_out["message"] = {"role": "assistant", "content": delta}
+                                            else:
+                                                chunk_out["response"] = delta
+                                            self.wfile.write((json.dumps(chunk_out) + "\n").encode("utf-8"))
+                                            self.wfile.flush()
+                                    except Exception:
+                                        pass
+                        else:
                             self.wfile.write(line)
                             self.wfile.flush()
-                    else:
-                        while True:
-                            chunk = resp.read(4096)
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                            self.wfile.flush()
+
             except (BrokenPipeError, ConnectionResetError):
-                # Client disconnected or aborted stream
                 pass
+            except urllib.error.HTTPError as he:
+                err_body = he.read().decode("utf-8", errors="replace")
+                print(f"[!] llama-server HTTP {he.code}: {err_body}")
+                try:
+                    err_json = json.loads(err_body)
+                    self.send_json(he.code, err_json)
+                except Exception:
+                    self.send_json(he.code, {"error": {"message": err_body, "code": he.code}})
             except Exception as e:
                 try:
                     self.send_json(502, {"error": f"Llama-server communication failed: {str(e)}"})
