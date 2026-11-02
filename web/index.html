@@ -1521,6 +1521,143 @@
       font-weight: 600;
     }
 
+    /* Manual Storage Import & Modality Selector */
+    .manual-import-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .manual-import-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .manual-import-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--text-main);
+      letter-spacing: 0.05em;
+    }
+    .manual-import-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: var(--crimson-bg);
+      color: var(--crimson);
+      font-weight: 700;
+    }
+    .manual-path-input {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 8px 10px;
+      border-radius: var(--radius-xs);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .manual-path-input:focus {
+      border-color: var(--crimson);
+    }
+    .modality-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .modality-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 9px 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .modality-card:hover {
+      border-color: var(--crimson);
+      background: var(--bg-card-hover);
+    }
+    .modality-card.active {
+      border-color: var(--crimson);
+      background: var(--crimson-bg);
+      box-shadow: 0 0 12px -2px var(--crimson-glow);
+    }
+    .mod-icon {
+      font-size: 1.15rem;
+      line-height: 1;
+    }
+    .mod-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow: hidden;
+    }
+    .mod-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.73rem;
+      font-weight: 700;
+      color: var(--text-main);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    .modality-card.active .mod-name {
+      color: var(--crimson);
+    }
+    .mod-desc {
+      font-size: 0.64rem;
+      color: var(--text-dim);
+      line-height: 1.2;
+    }
+    .modality-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .modality-tag-text {
+      background: rgba(16, 185, 129, 0.12);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .modality-tag-vision {
+      background: rgba(230, 57, 70, 0.12);
+      color: #e63946;
+      border: 1px solid rgba(230, 57, 70, 0.3);
+    }
+    .modality-tag-omni {
+      background: rgba(147, 51, 234, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(147, 51, 234, 0.35);
+    }
+    .modality-tag-proj {
+      background: rgba(245, 158, 11, 0.12);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    @media (max-width: 600px) {
+      .modality-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     /* ==========================================================================
        RESPONSIVE DESIGN (Mobile & Tablet)
        ========================================================================== */
@@ -1838,16 +1975,89 @@
           </div>
         </div>
 
-        <!-- Tab 2: Scan Phone Downloads -->
+        <!-- Tab 2: Phone Storage & Manual Import -->
         <div class="modal-tab-body" id="modal-tab-downloads">
-          <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;">
-            Detect any <code>.gguf</code> weights downloaded via browser into <code>/sdcard/Download</code>:
-          </p>
-          <button class="btn btn-secondary" onclick="scanPhoneDownloads()" style="align-self: flex-start;">
-            🔄 SCAN DOWNLOADS FOLDER
-          </button>
+          <!-- Manual Storage Import Card -->
+          <div class="manual-import-card">
+            <div class="manual-import-header">
+              <span class="manual-import-title">📁 MANUAL STORAGE IMPORT</span>
+              <span class="manual-import-badge">ANY STORAGE PATH</span>
+            </div>
+            <p style="font-size: 0.77rem; color: var(--text-dim); margin-bottom: 4px;">
+              Enter the exact path to any <code>.gguf</code> model file in phone storage or USB:
+            </p>
+            <input type="text" id="manual-model-path" class="manual-path-input" placeholder="/sdcard/Download/model.gguf or ~/models/..." />
+            
+            <!-- Modality Selector -->
+            <div style="margin-top: 6px;">
+              <div style="font-size: 0.72rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 6px;">
+                SELECT MODEL MODALITY PROFILE:
+              </div>
+              <div class="modality-grid">
+                <div class="modality-card active" id="modal-modality-text" onclick="selectManualModality('text')">
+                  <div class="mod-icon">📝</div>
+                  <div class="mod-info">
+                    <div class="mod-name">Text Only</div>
+                    <div class="mod-desc">Standard LLM (Fast, Minimal RAM)</div>
+                  </div>
+                </div>
+                <div class="modality-card" id="modal-modality-vision" onclick="selectManualModality('vision')">
+                  <div class="mod-icon">👁️</div>
+                  <div class="mod-info">
+                    <div class="mod-name">Vision + Text</div>
+                    <div class="mod-desc">VLM with mmproj (Images & PDFs)</div>
+                  </div>
+                </div>
+                <div class="modality-card" id="modal-modality-omni" onclick="selectManualModality('omni')">
+                  <div class="mod-icon">🎙️</div>
+                  <div class="mod-info">
+                    <div class="mod-name">Vision+Text+Audio</div>
+                    <div class="mod-desc">Full Omni (LFM3 Omni Multimodal)</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Companion Projector (Shown when Vision or Omni is selected) -->
+            <div id="manual-projector-group" style="display: none; margin-top: 8px; background: var(--bg-surface); border: 1px dashed var(--border); border-radius: var(--radius-xs); padding: 10px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label style="font-size: 0.72rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--crimson);">
+                  👁️ MULTIMODAL PROJECTOR (MMPROJ):
+                </label>
+                <button type="button" class="btn btn-secondary" onclick="refreshProjectorsList()" style="padding: 1px 6px; font-size: 0.65rem;">🔄 Refresh</button>
+              </div>
+              <select id="manual-projector-select" class="accel-input-sm" style="width: 100%; font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; padding: 6px;" onchange="handleManualProjectorChange()">
+                <option value="auto">🔍 Auto-Detect Companion Projector</option>
+                <option value="custom">✏️ Custom mmproj path...</option>
+              </select>
+              <input type="text" id="manual-projector-custom-path" class="manual-path-input" style="display: none; margin-top: 6px;" placeholder="/sdcard/Download/mmproj-....gguf" />
+            </div>
+
+            <div style="margin-top: 8px;">
+              <button class="btn btn-primary" onclick="executeManualImport()" style="width: 100%; padding: 9px; font-weight: 700;">
+                🚀 MOUNT & EXECUTE MODEL
+              </button>
+            </div>
+          </div>
+
+          <!-- Divider -->
+          <div style="display: flex; align-items: center; gap: 10px; margin: 14px 0 10px;">
+            <div style="flex: 1; height: 1px; background: var(--border);"></div>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">OR SCAN PHONE STORAGE</span>
+            <div style="flex: 1; height: 1px; background: var(--border);"></div>
+          </div>
+
+          <!-- Scanned Phone Downloads -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0;">
+              Detect <code>.gguf</code> files in <code>/sdcard/Download</code>:
+            </p>
+            <button class="btn btn-secondary" onclick="scanPhoneDownloads()" style="padding: 4px 10px; font-size: 0.72rem;">
+              🔄 SCAN STORAGE
+            </button>
+          </div>
           <div id="downloads-folder-list" style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
-            <p style="color: var(--text-dim); font-size: 0.82rem; font-family: 'JetBrains Mono', monospace;">Click scan to read storage.</p>
+            <p style="color: var(--text-dim); font-size: 0.82rem; font-family: 'JetBrains Mono', monospace;">Click scan to detect weights.</p>
           </div>
         </div>
 
@@ -1936,6 +2146,22 @@
           <span id="endpoint-wifi-api">http://phone-ip:8080/v1</span>
           <button class="copy-code-btn" onclick="copyText(document.getElementById('endpoint-wifi-api').innerText)">Copy</button>
         </div>
+
+        <h4 style="font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; font-weight: 700; color: var(--text-main); margin-top: 12px;">OPTION 4: NATIVE OLLAMA API & PHONE AGENTS</h4>
+        <p style="font-size: 0.78rem; color: var(--text-dim);">
+          🤖 <strong>For Phone Automation Agents</strong> (DroidRun, Mobile-Agent, AutoDroid - Screenshot & Action JSON):
+        </p>
+        <div class="copyable-code-box">
+          <span>http://127.0.0.1:11434</span>
+          <button class="copy-code-btn" onclick="copyText('http://127.0.0.1:11434')">Copy</button>
+        </div>
+        <div class="copyable-code-box" style="margin-top: 4px;">
+          <span>http://127.0.0.1:8080/api</span>
+          <button class="copy-code-btn" onclick="copyText('http://127.0.0.1:8080/api')">Copy</button>
+        </div>
+        <p style="font-size: 0.73rem; color: var(--text-subtle); margin-top: 4px;">
+          <em>Seamless Ollama parity: Native support for <code>/api/chat</code>, <code>/api/generate</code>, <code>/api/tags</code>, raw base64 screenshots, and auto-sanitized action JSON.</em>
+        </p>
         <p style="font-size: 0.73rem; color: var(--text-subtle); margin-top: 4px;">
           <em>API Key: None required (or enter <code>phone-gpu</code> if client app requires a key).</em>
         </p>
@@ -2578,16 +2804,30 @@
           dot.className = 'status-dot active';
           const cfg = data.config || {};
           const hasMmproj = Boolean(cfg.mmproj);
-          const cfgSummary = cfg.threads ? ` [${cfg.threads}T · ${cfg.kv_quant || 'q8_0'}${hasMmproj ? ' · 👁️ Vision' : ''}]` : '';
+          const modType = cfg.modality || (hasMmproj ? (data.current_model.toLowerCase().includes('omni') ? 'omni' : 'vision') : 'text');
+          let modLabel = 'Text';
+          if (modType === 'omni') modLabel = '🎙️ Omni';
+          else if (modType === 'vision' || hasMmproj) modLabel = '👁️ Vision';
+
+          const cfgSummary = cfg.threads ? ` [${cfg.threads}T · ${cfg.kv_quant || 'q8_0'} · ${modLabel}]` : '';
           topbarText.innerText = `${data.current_model}${cfgSummary}`;
-          modalActive.innerText = `${data.current_model}${cfgSummary}`;
+          modalActive.innerHTML = `
+            ${data.current_model}
+            <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 3px; font-weight: normal;">
+              Profile: <span style="color: ${modType === 'omni' ? '#c084fc' : (modType === 'vision' ? '#e63946' : '#10b981')}; font-weight: 700;">${modType.toUpperCase()}</span>
+              ${cfg.mmproj ? ` &bull; Projector: <code>${cfg.mmproj}</code>` : ''}
+            </div>
+          `;
           modalUnloadBtn.style.display = 'inline-flex';
           sideStatus.innerText = `ACTIVE // ${data.current_model}`;
           sideStatus.style.color = 'var(--crimson)';
 
           const telemVision = document.getElementById('telem-vision');
           if (telemVision) {
-            if (hasMmproj) {
+            if (modType === 'omni') {
+              telemVision.innerText = 'Omni (Vision+Audio)';
+              telemVision.style.color = '#c084fc';
+            } else if (hasMmproj || modType === 'vision') {
               telemVision.innerText = 'Active (mmproj)';
               telemVision.style.color = '#10b981';
             } else if (data.current_model.toLowerCase().includes('omni')) {
@@ -3009,17 +3249,118 @@
     }
 
     // =========================================================================
-    // MODEL MANAGER LOGIC
+    // MODEL MANAGER & MODALITY LOGIC
     // =========================================================================
+    let selectedManualModality = 'text';
+    window.discoveredProjectors = [];
+
+    function selectManualModality(mod) {
+      selectedManualModality = mod;
+      ['text', 'vision', 'omni'].forEach(m => {
+        const el = document.getElementById(`modal-modality-${m}`);
+        if (el) {
+          if (m === mod) el.classList.add('active');
+          else el.classList.remove('active');
+        }
+      });
+
+      const projGroup = document.getElementById('manual-projector-group');
+      if (projGroup) {
+        if (mod === 'vision' || mod === 'omni') {
+          projGroup.style.display = 'block';
+          refreshProjectorsList();
+          const ctxInput = document.getElementById('accel-ctx');
+          if (ctxInput && parseInt(ctxInput.value) < 4096) {
+            ctxInput.value = '4096';
+          }
+        } else {
+          projGroup.style.display = 'none';
+        }
+      }
+    }
+
+    function handleManualProjectorChange() {
+      const sel = document.getElementById('manual-projector-select');
+      const customInput = document.getElementById('manual-projector-custom-path');
+      if (sel && customInput) {
+        customInput.style.display = (sel.value === 'custom') ? 'block' : 'none';
+      }
+    }
+
+    async function refreshProjectorsList() {
+      const sel = document.getElementById('manual-projector-select');
+      if (!sel) return;
+      try {
+        const res = await fetch('/api/projectors');
+        const projs = await res.json();
+        window.discoveredProjectors = projs;
+
+        const currentVal = sel.value;
+        sel.innerHTML = '<option value="auto">🔍 Auto-Detect Companion Projector</option>';
+        projs.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.path;
+          opt.innerText = `${p.name} (${p.size} · ${p.location})`;
+          sel.appendChild(opt);
+        });
+        const customOpt = document.createElement('option');
+        customOpt.value = 'custom';
+        customOpt.innerText = '✏️ Custom mmproj path...';
+        sel.appendChild(customOpt);
+
+        if (currentVal && Array.from(sel.options).some(o => o.value === currentVal)) {
+          sel.value = currentVal;
+        }
+      } catch (e) {
+        console.warn('Could not fetch projectors list:', e);
+      }
+    }
+
+    async function executeManualImport() {
+      const pathInput = document.getElementById('manual-model-path');
+      const path = pathInput ? pathInput.value.trim() : '';
+      if (!path) {
+        alert('Please enter or paste the path to a .gguf model file.');
+        return;
+      }
+
+      let mmprojPath = null;
+      if (selectedManualModality === 'vision' || selectedManualModality === 'omni') {
+        const sel = document.getElementById('manual-projector-select');
+        if (sel) {
+          if (sel.value === 'custom') {
+            const customInput = document.getElementById('manual-projector-custom-path');
+            mmprojPath = customInput ? customInput.value.trim() : null;
+            if (!mmprojPath) {
+              alert('Please enter the custom mmproj projector file path.');
+              return;
+            }
+          } else if (sel.value !== 'auto') {
+            mmprojPath = sel.value;
+          }
+        }
+      }
+
+      const btn = event?.target;
+      await loadModel(path, btn, {
+        modality: selectedManualModality,
+        mmproj_path: mmprojPath
+      });
+    }
+
     async function loadInstalledModels() {
       const listEl = document.getElementById('installed-models-list');
       listEl.innerHTML = '<p style="color: var(--text-dim); font-size: 0.82rem; text-align: center; padding: 20px; font-family: monospace;">Scanning storage...</p>';
 
       try {
-        const res = await fetch('/api/models');
-        const models = await res.json();
+        const res = await fetch('/api/models?format=full');
+        const data = await res.json();
+        const models = Array.isArray(data) ? data : (data.models || []);
+        window.discoveredProjectors = data.projectors || [];
 
-        if (models.length === 0) {
+        const installedModels = models.filter(m => m.location === 'internal' && !m.is_projector);
+
+        if (installedModels.length === 0) {
           listEl.innerHTML = `
             <div style="text-align: center; padding: 25px 10px; color: var(--text-dim); font-size: 0.82rem; font-family: monospace;">
               No models found in ~/models/.<br>
@@ -3030,19 +3371,33 @@
         }
 
         listEl.innerHTML = '';
-        models.forEach(m => {
+        installedModels.forEach(m => {
           const isCurrent = currentModel && m.name === currentModel;
+          const detectedMod = m.detected_modality || 'text';
+          let modBadgeHtml = '';
+          if (detectedMod === 'omni') {
+            modBadgeHtml = '<span class="modality-tag modality-tag-omni">🎙️ OMNI</span>';
+          } else if (detectedMod === 'vision') {
+            modBadgeHtml = '<span class="modality-tag modality-tag-vision">👁️ VISION</span>';
+          } else {
+            modBadgeHtml = '<span class="modality-tag modality-tag-text">📝 TEXT</span>';
+          }
+
           const item = document.createElement('div');
           item.className = 'model-card-row';
           item.innerHTML = `
             <div class="model-meta">
-              <h5>${m.name} ${isCurrent ? '<span class="status-tag active-tag">ACTIVE BUFFER</span>' : ''}</h5>
-              <span>Size: ${m.size} &bull; ${m.location}</span>
+              <h5 style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                ${m.name}
+                ${modBadgeHtml}
+                ${isCurrent ? '<span class="status-tag active-tag">ACTIVE BUFFER</span>' : ''}
+              </h5>
+              <span>Size: ${m.size} &bull; ${m.location}${m.paired_mmproj_name ? ` &bull; 👁️ mmproj: ${m.paired_mmproj_name}` : ''}</span>
             </div>
             <div>
               ${isCurrent ? 
                 `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` : 
-                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this)">LOAD</button>`
+                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this, { modality: '${detectedMod}', mmproj_path: '${m.paired_mmproj || ''}' })">LOAD</button>`
               }
             </div>
           `;
@@ -3055,49 +3410,136 @@
 
     async function scanPhoneDownloads() {
       const listEl = document.getElementById('downloads-folder-list');
-      listEl.innerHTML = '<p style="color: var(--text-dim); font-size: 0.82rem; font-family: monospace;">Scanning /sdcard/Download ...</p>';
+      listEl.innerHTML = '<p style="color: var(--text-dim); font-size: 0.82rem; font-family: monospace;">Scanning phone storage (/sdcard/Download) ...</p>';
 
       try {
-        const res = await fetch('/api/models?scan_downloads=1');
-        const models = await res.json();
-        const dlModels = models.filter(m => m.location === 'downloads');
+        const res = await fetch('/api/models?scan_downloads=1&format=full');
+        const data = await res.json();
+        const allModels = Array.isArray(data) ? data : (data.models || []);
+        window.discoveredProjectors = data.projectors || [];
+
+        const dlModels = allModels.filter(m => m.location === 'downloads' && !m.is_projector);
+        const dlProjectors = allModels.filter(m => m.is_projector) || window.discoveredProjectors;
 
         if (dlModels.length === 0) {
           listEl.innerHTML = `
             <div style="background: var(--bg-card); padding: 14px; border-radius: var(--radius-xs); font-size: 0.8rem; color: var(--text-dim); line-height: 1.5; font-family: monospace;">
-              No .gguf files detected in /sdcard/Download.<br>
-              Download any model from Hugging Face via Chrome, then tap scan again.
+              No model .gguf files detected in /sdcard/Download.<br>
+              Download weights via mobile browser or enter a custom path above!
             </div>
           `;
           return;
         }
 
         listEl.innerHTML = '';
-        dlModels.forEach(m => {
+        dlModels.forEach((m, idx) => {
           const isCurrent = currentModel && m.name === currentModel;
+          const detectedMod = m.detected_modality || 'text';
+          const defaultProj = m.paired_mmproj || '';
+          const defaultProjName = m.paired_mmproj_name || '';
+
           const item = document.createElement('div');
           item.className = 'model-card-row';
+          item.style.flexDirection = 'column';
+          item.style.alignItems = 'stretch';
+          item.style.gap = '8px';
+
+          let modBadgeHtml = '';
+          if (detectedMod === 'omni') {
+            modBadgeHtml = '<span class="modality-tag modality-tag-omni">🎙️ OMNI</span>';
+          } else if (detectedMod === 'vision') {
+            modBadgeHtml = '<span class="modality-tag modality-tag-vision">👁️ VISION</span>';
+          } else {
+            modBadgeHtml = '<span class="modality-tag modality-tag-text">📝 TEXT</span>';
+          }
+
           item.innerHTML = `
-            <div class="model-meta">
-              <h5>${m.name} <span class="status-tag download-tag">PHONE STORAGE</span></h5>
-              <span>Size: ${m.size}</span>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+              <div class="model-meta" style="flex: 1;">
+                <h5 style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                  ${m.name}
+                  ${modBadgeHtml}
+                  ${isCurrent ? '<span class="status-tag active-tag">ACTIVE</span>' : ''}
+                </h5>
+                <span>Size: <b>${m.size}</b> &bull; Path: <code style="font-size: 0.72rem;">${m.path}</code></span>
+              </div>
+              <div>
+                ${isCurrent ?
+                  `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` :
+                  `<button class="btn btn-primary" id="btn-load-dl-${idx}" onclick="executeCardLoad('${m.path}', ${idx}, this)">LOAD & EXECUTE</button>`
+                }
+              </div>
             </div>
-            <div>
-              ${isCurrent ? 
-                `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` : 
-                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this)">LOAD & EXECUTE</button>`
-              }
+
+            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); padding: 8px 10px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">Modality:</span>
+                <select id="card-mod-${idx}" class="accel-input-sm" style="width: auto; padding: 2px 6px; font-size: 0.72rem;" onchange="handleCardModalityChange(${idx})">
+                  <option value="text" ${detectedMod === 'text' ? 'selected' : ''}>📝 Text Only (LLM)</option>
+                  <option value="vision" ${detectedMod === 'vision' ? 'selected' : ''}>👁️ Vision + Text (VLM)</option>
+                  <option value="omni" ${detectedMod === 'omni' ? 'selected' : ''}>🎙️ Vision + Text + Audio (Omni)</option>
+                </select>
+              </div>
+
+              <div id="card-proj-wrapper-${idx}" style="display: ${detectedMod !== 'text' ? 'flex' : 'none'}; align-items: center; gap: 6px; flex: 1; min-width: 200px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--crimson);">Projector:</span>
+                <select id="card-proj-${idx}" class="accel-input-sm" style="flex: 1; padding: 2px 6px; font-size: 0.72rem;">
+                  <option value="auto">🔍 Auto-Match Companion</option>
+                  ${(window.discoveredProjectors || []).map(p => `
+                    <option value="${p.path}" ${p.name === defaultProjName ? 'selected' : ''}>${p.name} (${p.size})</option>
+                  `).join('')}
+                </select>
+              </div>
             </div>
           `;
           listEl.appendChild(item);
         });
+
+        if (dlProjectors && dlProjectors.length > 0) {
+          const projsCard = document.createElement('div');
+          projsCard.style.cssText = 'margin-top: 10px; padding: 10px; background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--radius-xs);';
+          projsCard.innerHTML = `
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; font-weight: 700; color: #f59e0b; text-transform: uppercase; margin-bottom: 6px;">
+              👁️ DETECTED MULTIMODAL PROJECTORS (${dlProjectors.length})
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              ${dlProjectors.map(p => `
+                <div style="display: flex; justify-content: space-between; font-size: 0.74rem; font-family: monospace; color: var(--text-dim);">
+                  <span>${p.name}</span>
+                  <span style="color: var(--text-muted);">${p.size}</span>
+                </div>
+              `).join('')}
+            </div>
+          `;
+          listEl.appendChild(projsCard);
+        }
       } catch (err) {
         listEl.innerHTML = `<p style="color: var(--crimson); font-size: 0.82rem;">Scan error: ${err.message}</p>`;
       }
     }
 
-    async function loadModel(path, btnEl) {
+    function handleCardModalityChange(idx) {
+      const modSel = document.getElementById(`card-mod-${idx}`);
+      const projWrap = document.getElementById(`card-proj-wrapper-${idx}`);
+      if (modSel && projWrap) {
+        projWrap.style.display = (modSel.value !== 'text') ? 'flex' : 'none';
+      }
+    }
+
+    async function executeCardLoad(modelPath, idx, btnEl) {
+      const modSel = document.getElementById(`card-mod-${idx}`);
+      const projSel = document.getElementById(`card-proj-${idx}`);
+      const modality = modSel ? modSel.value : 'auto';
+      let mmprojPath = null;
+      if (modality !== 'text' && projSel && projSel.value !== 'auto') {
+        mmprojPath = projSel.value;
+      }
+      await loadModel(modelPath, btnEl, { modality, mmproj_path: mmprojPath });
+    }
+
+    async function loadModel(path, btnEl, extraOptions = {}) {
       const btn = btnEl || (typeof event !== 'undefined' ? event?.target : null);
+      const originalText = btn ? btn.innerText : 'LOAD';
       if (btn) {
         btn.innerText = 'ACCELERATING...';
         btn.disabled = true;
@@ -3105,11 +3547,19 @@
 
       // Read acceleration parameters from UI
       const threadsVal = parseInt(document.getElementById('accel-threads')?.value);
-      const ctxVal = parseInt(document.getElementById('accel-ctx')?.value) || 2048;
+      let ctxVal = parseInt(document.getElementById('accel-ctx')?.value) || 2048;
       const flashAttnVal = document.getElementById('accel-fa')?.checked ?? true;
       const kvQuantVal = document.getElementById('accel-kv')?.value || 'f16';
       const gpuLayersVal = parseInt(document.getElementById('accel-gpu-layers')?.value) || 0;
       const pinCoresVal = document.getElementById('accel-pin-cores')?.checked ?? true;
+
+      const modality = extraOptions.modality || 'auto';
+      const mmprojPath = extraOptions.mmproj_path || null;
+
+      // Ensure at least 4096 context for vision / omni models
+      if ((modality === 'vision' || modality === 'omni' || mmprojPath) && ctxVal < 4096) {
+        ctxVal = 4096;
+      }
 
       const payload = {
         path: path,
@@ -3118,7 +3568,9 @@
         flash_attn: flashAttnVal,
         kv_quant: kvQuantVal,
         gpu_layers: gpuLayersVal,
-        pin_cores: pinCoresVal
+        pin_cores: pinCoresVal,
+        modality: modality,
+        mmproj_path: mmprojPath
       };
 
       try {
@@ -3138,7 +3590,7 @@
         alert('Failed to connect to phone runtime: ' + err.message);
       } finally {
         if (btn) {
-          btn.innerText = 'LOAD';
+          btn.innerText = originalText;
           btn.disabled = false;
         }
       }

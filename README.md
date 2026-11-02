@@ -236,11 +236,13 @@ You can use your phone as a private, local OpenAI-compatible API endpoint direct
 
 ### 📍 Available Base URLs
 
-| Location / Client | Base URL | Network / Requirements |
-| :--- | :--- | :--- |
-| **📱 On the Same Phone** | `http://127.0.0.1:8080/v1` *(or `http://localhost:8080/v1`)* | 100% offline, zero Wi-Fi required |
-| **💻 On PC via USB (ADB)** | `http://localhost:8080/v1` | Run `start_pc_bridge.bat` (zero latency) |
-| **🌐 Over Local Wi-Fi** | `http://<PHONE_IP>:8080/v1` | Same Wi-Fi network (displayed in app) |
+| Location / Client | Protocol / Framework | Base URL | Network / Requirements |
+| :--- | :--- | :--- | :--- |
+| **📱 On the Same Phone** | **OpenAI API (`/v1`)** | `http://127.0.0.1:8080/v1` *(or `localhost`)* | 100% offline, zero Wi-Fi required |
+| **🤖 Phone Automation Agents** | **Native Ollama (`11434`)** | `http://127.0.0.1:11434` | Default Ollama port (AutoDroid, DroidRun) |
+| **🤖 Phone Automation Agents** | **Native Ollama (`8080`)** | `http://127.0.0.1:8080/api` | Ollama format on primary port |
+| **💻 On PC via USB (ADB)** | **OpenAI API (`/v1`)** | `http://localhost:8080/v1` | Run `start_pc_bridge.bat` (zero latency) |
+| **🌐 Over Local Wi-Fi** | **OpenAI API (`/v1`)** | `http://<PHONE_IP>:8080/v1` | Same Wi-Fi network (displayed in app) |
 
 > **Note on API Keys:** The endpoint is 100% local and open. If your client app (like Chatbox, ChatterUI, or Continue) requires an API key, you can enter any string (e.g. `phone-gpu` or `not-needed`).
 
@@ -310,11 +312,16 @@ If you are building an AI agent (with **LangChain**, **AutoGen**, **CrewAI**, **
 * **On PC over USB Tunnel:** `http://localhost:8080/v1`
 
 #### How the Engine Handles Vision & Ollama Agent Payloads:
-1. **Full Ollama API & Format Support:** In addition to OpenAI (`/v1/chat/completions`), Android-GPU natively supports Ollama endpoints (`/api/chat`, `/api/generate`, `/api/tags`, `/api/version`).
+1. **Full Ollama API & Dual Port Listening (11434 & 8080):** In addition to OpenAI (`/v1/chat/completions`), Android-GPU natively supports Ollama endpoints (`/api/chat`, `/api/generate`, `/api/tags`, `/api/version`). The engine automatically listens on both port **8080** and standard Ollama port **11434**, allowing apps targeting Ollama's default host (`http://127.0.0.1:11434`) to connect out-of-the-box.
 2. **Raw Base64 & `"images"` Arrays:** AI agents can send images using Ollama's `"images": ["<raw_base64>"]` array or OpenAI's `{"type": "image_url", ...}` format. Raw base64 strings and remote HTTP/HTTPS URLs are automatically normalized into data URIs.
-3. **Automatic Action JSON Cleaning:** Autonomous phone-controlling agents (which take screenshots to decide where to tap and parse the output with `json.loads`) frequently fail if the model wraps output in markdown code blocks (` ```json ... ``` `) or conversational filler. Android-GPU automatically sanitizes the response, extracting pure, valid JSON so the agent's action parser never crashes.
-4. **Paired Projector Auto-Download:** Multimodal models like Liquid AI LFM3 Omni 2B require both the model weights and the visual projector (`mmproj-LFM3-Omni-2B-F16.gguf`). The engine automatically downloads and mounts the matching projector.
-5. **Dynamic Vision Context Scaling:** When an image is detected, the context buffer automatically scales to 4096+ tokens to accommodate visual projector tokens (~576–1152 tokens per image).
+3. **Ultra-Robust Action JSON Sanitizer (`robust_clean_json`):** Autonomous phone-controlling agents (which take screenshots to decide where to tap and parse the output with `json.loads` or Android `JSONObject`) frequently crash with `could not parse AI output as an action JSON` when models emit thinking process tags (`<think>...</think>`, `<thought>...</thought>`), conversational preamble, Python single quotes (`{'action': 'tap'}`), or trailing commas. Android-GPU forces JSON grammar at the sampler level, strips all thinking tags and code fences, repairs syntax flaws, and ensures 100% valid parseable action JSON for both non-streaming and streaming requests.
+4. **Manual Storage Import with Explicit Modality Selection:**
+   * 📝 **Text Only:** Standard LLM mode (fast, minimal RAM overhead, context 2048).
+   * 👁️ **Vision + Text:** Multimodal VLM mode (pairs model with its `mmproj` projector, context 4096).
+   * 🎙️ **Vision + Text + Audio (Omni):** Liquid AI LFM3 Omni mode (tuned repeat penalty & sampling for omni-modal weights).
+   * Users can enter any storage path (`/sdcard/Download/model.gguf` or USB OTG) and pick or auto-detect any projector (`mmproj-*.gguf`) from storage.
+5. **Paired Projector Auto-Discovery:** Multimodal models like Liquid AI LFM3 Omni 2B require both the model weights and the companion visual projector (`mmproj-LFM3-Omni-2B-F16.gguf`). The engine automatically locates matching projectors across all phone storage folders (`/sdcard/Download`, `~/models`, etc.).
+6. **Dynamic Vision Context Scaling:** When multimodal weights or images are loaded, the context buffer automatically scales to 4096+ tokens to accommodate visual projector tokens (~576–1152 tokens per image).
 
 #### Ollama-Style Phone Automation Agent Example (Take Screenshot -> Output Action JSON)
 ```python

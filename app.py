@@ -9,6 +9,7 @@ Zero external dependencies - runs on standard Python 3 in Termux.
 import os
 import sys
 import json
+import re
 import time
 import socket
 import signal
@@ -198,6 +199,48 @@ PAIRED_PROJECTORS = {
     }
 }
 
+def find_all_projectors():
+    """
+    Discover all multimodal projectors (*mmproj*.gguf) across phone storage and models directory.
+    Returns list of dicts with name, path, size, and location.
+    """
+    search_dirs = [
+        MODELS_DIR,
+        "/sdcard/Download",
+        "/sdcard/Downloads",
+        "/storage/emulated/0/Download",
+        "/storage/emulated/0/Downloads",
+        os.path.expanduser("~/storage/downloads"),
+        os.path.expanduser("~/storage/shared/Download")
+    ]
+    projectors = []
+    seen = set()
+    for d in search_dirs:
+        if d and os.path.isdir(d):
+            try:
+                for f in os.listdir(d):
+                    fl = f.lower()
+                    if fl.endswith(".gguf") and ("mmproj" in fl or "projector" in fl):
+                        p = os.path.join(d, f)
+                        rp = os.path.realpath(p)
+                        if rp not in seen and os.path.isfile(p):
+                            seen.add(rp)
+                            try:
+                                size_bytes = os.path.getsize(p)
+                                size_mb = size_bytes / (1024 * 1024)
+                                size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
+                            except Exception:
+                                size_str = "Unknown"
+                            projectors.append({
+                                "name": f,
+                                "path": p,
+                                "size": size_str,
+                                "location": "models" if d == MODELS_DIR else "downloads"
+                            })
+            except Exception:
+                pass
+    return projectors
+
 def find_matching_mmproj(model_path):
     """
     Find matching multimodal projector (mmproj-*.gguf) for vision/omni/audio models.
@@ -265,6 +308,16 @@ def find_matching_mmproj(model_path):
                         return os.path.join(sdir, f)
         except Exception:
             pass
+
+    # 4. Fallback to any discovered projector if only one exists or matches
+    all_projs = find_all_projectors()
+    if all_projs:
+        for p in all_projs:
+            if any(kw in model_stem and kw in p["name"].lower() for kw in ["omni", "lfm", "llava", "minicpm", "vision"]):
+                return p["path"]
+        if len(all_projs) == 1:
+            return all_projs[0]["path"]
+
     return None
 
 def resolve_image_url_to_base64(url):
@@ -295,55 +348,170 @@ def resolve_image_url_to_base64(url):
         print(f"[!] Warning: Could not pre-fetch remote image URL {url}: {e}")
         return url
 
-def extract_clean_json(text):
+def robust_clean_json(text):
     """
     Sanitize AI response to extract pure parseable JSON.
-    Essential for autonomous phone/screen control agents where json.loads() fails
-    if the model wrapped JSON in markdown code fences (```json ... ```) or conversational intro.
+    Essential for autonomous phone/screen control agents (DroidRun, AutoDroid, Mobile-Agent, etc.)
+    where json.loads() or new JSONObject() fails if the model outputs thinking tags (<think>...</think>),
+    conversational text, markdown code fences, single quotes, or trailing commas.
     """
     if not text or not isinstance(text, str):
         return text
-    text_stripped = text.strip()
 
-    # 1. Strip markdown code fences ```json ... ``` or ``` ... ```
-    if text_stripped.startswith("```"):
-        lines = text_stripped.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text_stripped = "\n".join(lines).strip()
+    # 1. Strip <think>...</think>, <thought>...</thought>, <reasoning>...</reasoning>, <system>...</system>
+    text_clean = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
+    text_clean = re.sub(r'<thought>[\s\S]*?</thought>', '', text_clean, flags=re.IGNORECASE)
+    text_clean = re.sub(r'<reasoning>[\s\S]*?</reasoning>', '', text_clean, flags=re.IGNORECASE)
+    text_clean = re.sub(r'<system>[\s\S]*?</system>', '', text_clean, flags=re.IGNORECASE)
 
-    # 2. Check if text_stripped is directly valid JSON
+    # 2. Extract content from markdown code fences if present ```json ... ``` or ``` ... ```
+    fence_matches = re.findall(r'```(?:json)?\s*([\s\S]*?)\s*```', text_clean, re.IGNORECASE)
+    if fence_matches:
+        for fm in fence_matches:
+            if "{" in fm or "action" in fm.lower():
+                text_clean = fm.strip()
+                break
+        else:
+            text_clean = fence_matches[0].strip()
+
+    text_stripped = text_clean.strip()
+
+    # 3. Direct JSON load attempt
     try:
         json.loads(text_stripped)
         return text_stripped
     except Exception:
         pass
 
-    # 3. Search for outermost JSON object { ... }
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        candidate = text[first_brace:last_brace + 1].strip()
+    # Helper to repair syntax flaws (single quotes, trailing commas, python booleans)
+    def try_repair_and_load(s):
+        s_clean = s.strip()
         try:
-            json.loads(candidate)
-            return candidate
+            return json.loads(s_clean), s_clean
         except Exception:
             pass
+        # Replace Python booleans/None
+        s_fixed = re.sub(r'\bTrue\b', 'true', s_clean)
+        s_fixed = re.sub(r'\bFalse\b', 'false', s_fixed)
+        s_fixed = re.sub(r'\bNone\b', 'null', s_fixed)
+        # Fix trailing commas before } or ]
+        s_fixed = re.sub(r',\s*([}\]])', r'\1', s_fixed)
+        try:
+            return json.loads(s_fixed), s_fixed
+        except Exception:
+            pass
+        # Fix single quotes to double quotes
+        if "'" in s_fixed and '"' not in s_fixed:
+            s_quotes = s_fixed.replace("'", '"')
+            s_quotes = re.sub(r',\s*([}\]])', r'\1', s_quotes)
+            try:
+                return json.loads(s_quotes), s_quotes
+            except Exception:
+                pass
+        s_quotes = re.sub(r"\'([a-zA-Z0-9_]+)\'\s*:", r'"\1":', s_fixed)
+        s_quotes = re.sub(r":\s*\'([^\']*?)\'", r': "\1"', s_quotes)
+        s_quotes = re.sub(r',\s*([}\]])', r'\1', s_quotes)
+        try:
+            return json.loads(s_quotes), s_quotes
+        except Exception:
+            pass
+        return None, None
 
-    # 4. Search for outermost JSON array [ ... ]
-    first_bracket = text.find("[")
-    last_bracket = text.rfind("]")
+    # 4. Search for { ... } blocks
+    start_indices = [i for i, c in enumerate(text_stripped) if c == '{']
+    end_indices = [i for i, c in enumerate(text_stripped) if c == '}']
+
+    if start_indices and end_indices:
+        # Check outermost candidate
+        candidate = text_stripped[start_indices[0]:end_indices[-1] + 1].strip()
+        parsed, repaired = try_repair_and_load(candidate)
+        if parsed is not None:
+            return repaired
+
+        # Check individual pairs, prioritizing blocks with "action" or "coordinate"
+        for si in start_indices:
+            for ei in reversed(end_indices):
+                if ei > si:
+                    cand = text_stripped[si:ei + 1].strip()
+                    if "action" in cand.lower() or "coordinate" in cand.lower():
+                        parsed, repaired = try_repair_and_load(cand)
+                        if parsed is not None:
+                            return repaired
+
+    # 5. Fallback synthesized JSON for phone control agents (tap, click, type, swipe, back, home)
+    tap_match = re.search(r'(?:tap|click|touch)\s*(?:at|on|coordinate)?\s*[:=\s]*\[?\s*(\d{1,5})\s*[,x\s]\s*(\d{1,5})\s*\]?', text_stripped, re.IGNORECASE)
+    if tap_match:
+        x, y = int(tap_match.group(1)), int(tap_match.group(2))
+        return json.dumps({"action": "tap", "coordinate": [x, y]})
+
+    type_match = re.search(r'(?:type|input|write)\s*[:=\s]*["\'](.*?)["\']', text_stripped, re.IGNORECASE)
+    if type_match:
+        return json.dumps({"action": "type", "text": type_match.group(1)})
+
+    swipe_match = re.search(r'swipe\s*(?:from)?\s*\[?(\d+),\s*(\d+)\]?\s*(?:to)?\s*\[?(\d+),\s*(\d+)\]?', text_stripped, re.IGNORECASE)
+    if swipe_match:
+        return json.dumps({
+            "action": "swipe",
+            "start": [int(swipe_match.group(1)), int(swipe_match.group(2))],
+            "end": [int(swipe_match.group(3)), int(swipe_match.group(4))]
+        })
+
+    if re.search(r'\b(press|go)\s+back\b', text_stripped, re.IGNORECASE):
+        return json.dumps({"action": "back"})
+    if re.search(r'\b(press|go)\s+home\b', text_stripped, re.IGNORECASE):
+        return json.dumps({"action": "home"})
+
+    # 6. Search for [ ... ] blocks if not an action sentence
+    first_bracket = text_stripped.find("[")
+    last_bracket = text_stripped.rfind("]")
     if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-        candidate = text[first_bracket:last_bracket + 1].strip()
-        try:
-            json.loads(candidate)
-            return candidate
-        except Exception:
-            pass
+        candidate = text_stripped[first_bracket:last_bracket + 1].strip()
+        parsed, repaired = try_repair_and_load(candidate)
+        if parsed is not None:
+            return repaired
 
     return text_stripped
+
+def is_json_or_action_request(payload):
+    """
+    Check if the client or agent requested JSON output or is an autonomous phone-control agent.
+    If true, Phone as GPU will enforce JSON grammar on llama-server and sanitize the output.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("format") == "json":
+        return True
+    rf = payload.get("response_format")
+    if isinstance(rf, dict) and rf.get("type") in ("json_object", "json"):
+        return True
+
+    text_corpus = []
+    if "prompt" in payload and isinstance(payload["prompt"], str):
+        text_corpus.append(payload["prompt"].lower())
+    for msg in payload.get("messages", []):
+        if isinstance(msg, dict):
+            c = msg.get("content")
+            if isinstance(c, str):
+                text_corpus.append(c.lower())
+            elif isinstance(c, list):
+                for part in c:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_corpus.append(part.get("text", "").lower())
+
+    joined = " ".join(text_corpus)
+    if any(phrase in joined for phrase in [
+        "action json", "json object", "output json", "return json",
+        "json only", "valid json", "format: json", "as json"
+    ]):
+        return True
+
+    action_terms = ["action", "coordinate", "tap", "click", "swipe", "bounds", "screenshot", "point"]
+    matches = sum(1 for term in action_terms if term in joined)
+    if matches >= 2 and "json" in joined:
+        return True
+    if matches >= 3:
+        return True
+    return False
 
 def normalize_multimodal_payload(payload):
     """
@@ -637,7 +805,7 @@ def _poll_server_health(proc, timeout_sec=35, port=None):
         time.sleep(0.5)
     return False
 
-def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="f16", gpu_layers=0, pin_cores=True, mmproj_path=None):
+def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True, kv_quant="f16", gpu_layers=0, pin_cores=True, mmproj_path=None, modality="auto"):
     """
     Start llama-server with hardware acceleration flags:
     - Big-core CPU affinity (prevents slow efficiency core stalls)
@@ -645,6 +813,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     - 8-bit Key-Value cache quantization (halves KV memory bandwidth bottleneck)
     - Mobile GPU offload via Vulkan (if compiled with Vulkan support)
     - Multimodal projector support (for LFM3 Omni, vision, and audio models)
+    - Explicit modality profile: "text", "vision", "omni", or "auto"
     - Optimized batch & micro-batch sizes for mobile CPU caches
     """
     global llama_process, current_model_path, current_model_name, current_llama_port, active_runtime_config
@@ -664,13 +833,36 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     if threads is None or threads <= 0:
         threads = cpu_topo["recommended_threads"]
 
-    # Detect multimodal projector (for LFM3 Omni, LLaVA, etc.)
-    if not mmproj_path:
-        mmproj_path = find_matching_mmproj(model_path)
+    model_name_lower = os.path.basename(model_path).lower()
 
-    # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
-    if mmproj_path and os.path.isfile(mmproj_path) and ctx_size < 4096:
-        ctx_size = 4096
+    # Resolve modality profile: "text", "vision", "omni", or "auto"
+    if modality == "auto":
+        if mmproj_path or find_matching_mmproj(model_path):
+            if "omni" in model_name_lower:
+                modality = "omni"
+            else:
+                modality = "vision"
+        else:
+            modality = "text"
+
+    if modality == "text":
+        mmproj_path = None
+    elif modality in ("vision", "omni"):
+        if not mmproj_path:
+            mmproj_path = find_matching_mmproj(model_path)
+        if not mmproj_path or not os.path.isfile(mmproj_path):
+            all_projs = find_all_projectors()
+            if all_projs:
+                matched = [p["path"] for p in all_projs if any(k in model_name_lower and k in p["name"].lower() for k in ["lfm3", "omni", "llava", "minicpm", "qwen", "smolvlm"])]
+                mmproj_path = matched[0] if matched else all_projs[0]["path"]
+        if not mmproj_path or not os.path.isfile(mmproj_path):
+            raise RuntimeError(
+                f"Multimodal Projector Missing: {modality.title()} mode requires a paired mmproj projector (.gguf). "
+                f"Please download mmproj-LFM3-Omni-2B-F16.gguf or select an mmproj file from storage."
+            )
+        # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
+        if ctx_size < 4096:
+            ctx_size = 4096
 
     # Acquire guaranteed free port
     active_port = find_free_port(LLAMA_PORT)
@@ -693,6 +885,10 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     # Build accelerated command
     accel_args = list(base_args)
 
+    # Omni architecture hyperparameter tuning
+    if modality == "omni":
+        accel_args.extend(["--repeat-penalty", "1.05", "--temp", "0.4"])
+
     # Flash Attention (reduces memory bandwidth and attention overhead)
     fa_style = features.get("flash_attn")
     if fa_style == "value":
@@ -712,8 +908,9 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
     print("=" * 60)
     print(f"[*] Model       : {os.path.basename(model_path)}")
+    print(f"[*] Modality    : {modality.upper()} ({'Vision/Omni Multimodal' if modality in ('vision', 'omni') else 'Text-Only LLM'})")
     if mmproj_path and os.path.isfile(mmproj_path):
-        print(f"[*] Multimodal  : {os.path.basename(mmproj_path)} (Omni/Vision Active)")
+        print(f"[*] Projector   : {os.path.basename(mmproj_path)} (Multimodal Active)")
     print(f"[*] Port        : {active_port}")
     print(f"[*] Threads     : {threads} (Optimal ARM core allocation)")
     print(f"[*] Context     : {ctx_size} tokens")
@@ -813,14 +1010,48 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             "kv_quant": kv_quant if (kv_quant != "f16" and is_accel and features.get("kv_quant")) else "f16",
             "gpu_layers": gpu_layers if (is_accel and features.get("gpu_layers")) else 0,
             "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None,
-            "mmproj": os.path.basename(mmproj_path) if (mmproj_path and os.path.isfile(mmproj_path)) else None
+            "mmproj": os.path.basename(mmproj_path) if (mmproj_path and os.path.isfile(mmproj_path)) else None,
+            "modality": modality
         }
 
 def scan_models(include_downloads=True):
     """Scan ~/models and Android download directories for GGUF files."""
     results = []
     seen_real_paths = set()
-    
+
+    def classify_file(path, fname, location):
+        fl = fname.lower()
+        is_proj = ("mmproj" in fl or "projector" in fl)
+        
+        if "omni" in fl:
+            modality = "omni"
+        elif any(k in fl for k in ["vision", "vl", "llava", "minicpm", "moondream", "smolvlm", "qwen"]):
+            modality = "vision"
+        else:
+            modality = "text"
+
+        paired = find_matching_mmproj(path) if (modality in ("vision", "omni") and not is_proj) else None
+
+        try:
+            size_bytes = os.path.getsize(path)
+            if size_bytes < 1024 * 1024:
+                return None
+            size_mb = size_bytes / (1024 * 1024)
+            size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
+        except Exception:
+            size_str = "Unknown"
+
+        return {
+            "name": fname,
+            "path": path,
+            "size": size_str,
+            "location": location,
+            "is_projector": is_proj,
+            "detected_modality": modality,
+            "paired_mmproj": paired,
+            "paired_mmproj_name": os.path.basename(paired) if paired else None
+        }
+
     # 1. Scan internal ~/models
     if os.path.exists(MODELS_DIR):
         for f in os.listdir(MODELS_DIR):
@@ -830,19 +1061,10 @@ def scan_models(include_downloads=True):
                     real = os.path.realpath(path)
                     if real in seen_real_paths:
                         continue
-                    size_bytes = os.path.getsize(path)
-                    # Filter out empty or incomplete files (< 1MB)
-                    if size_bytes < 1024 * 1024:
-                        continue
-                    seen_real_paths.add(real)
-                    size_mb = size_bytes / (1024 * 1024)
-                    size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
-                    results.append({
-                        "name": f,
-                        "path": path,
-                        "size": size_str,
-                        "location": "internal"
-                    })
+                    item = classify_file(path, f, "internal")
+                    if item:
+                        seen_real_paths.add(real)
+                        results.append(item)
                 except Exception:
                     pass
 
@@ -865,18 +1087,10 @@ def scan_models(include_downloads=True):
                             real = os.path.realpath(path)
                             if real in seen_real_paths:
                                 continue
-                            size_bytes = os.path.getsize(path)
-                            if size_bytes < 1024 * 1024:
-                                continue
-                            seen_real_paths.add(real)
-                            size_mb = size_bytes / (1024 * 1024)
-                            size_str = f"{size_mb / 1024:.2f} GB" if size_mb > 1000 else f"{size_mb:.1f} MB"
-                            results.append({
-                                "name": f,
-                                "path": path,
-                                "size": size_str,
-                                "location": "downloads"
-                            })
+                            item = classify_file(path, f, "downloads")
+                            if item:
+                                seen_real_paths.add(real)
+                                results.append(item)
                 except Exception:
                     pass
 
@@ -1050,7 +1264,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             include_dl = "scan_downloads" in query
             models = scan_models(include_downloads=include_dl)
-            self.send_json(200, models)
+            if query.get("format", [""])[0] == "full":
+                projs = find_all_projectors()
+                self.send_json(200, {"models": models, "projectors": projs})
+            else:
+                self.send_json(200, models)
+            return
+
+        elif clean_path in ("/api/projectors", "/projectors"):
+            projs = find_all_projectors()
+            self.send_json(200, projs)
             return
 
         elif clean_path == "/api/download_status":
@@ -1227,6 +1450,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 gpu_layers = int(payload.get("gpu_layers", 0))
                 pin_cores = bool(payload.get("pin_cores", True))
                 mmproj_path = payload.get("mmproj_path")
+                modality = str(payload.get("modality", "auto"))
 
                 start_llama_server(
                     model_path=model_path,
@@ -1236,7 +1460,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     kv_quant=kv_quant,
                     gpu_layers=gpu_layers,
                     pin_cores=pin_cores,
-                    mmproj_path=mmproj_path
+                    mmproj_path=mmproj_path,
+                    modality=modality
                 )
                 self.send_json(200, {
                     "status": "ok",
@@ -1274,10 +1499,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             is_ollama_chat = (clean_path == "/api/chat")
             is_ollama_generate = (clean_path == "/api/generate")
             is_stream = bool(payload.get("stream", False))
-            wants_json = bool(
-                payload.get("format") == "json"
-                or (isinstance(payload.get("response_format"), dict) and payload.get("response_format", {}).get("type") == "json_object")
-            )
+            wants_json = is_json_or_action_request(payload)
 
             # Normalize and resolve any multimodal image inputs (Ollama images arrays, raw base64, data URIs, remote URLs)
             payload, has_images = normalize_multimodal_payload(payload)
@@ -1411,8 +1633,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                             if msg_node and isinstance(msg_node, dict):
                                 content_str = msg_node.get("content", "")
                                 # Clean JSON output for agents expecting raw action JSON
-                                if wants_json or "{" in content_str or "action" in content_str.lower() or "coordinate" in content_str.lower():
-                                    clean_content = extract_clean_json(content_str)
+                                if wants_json or "{" in content_str or any(kw in content_str.lower() for kw in ["action", "coordinate", "tap", "click"]):
+                                    clean_content = robust_clean_json(content_str)
                                     msg_node["content"] = clean_content
                                     content_str = clean_content
 
@@ -1446,6 +1668,81 @@ class RequestHandler(BaseHTTPRequestHandler):
                         return
 
                     # Streaming responses
+                    # If client requests JSON / action output while streaming, buffer full generation
+                    # to deliver 100% valid, uncorrupted action JSON to autonomous agents.
+                    if wants_json:
+                        accumulated = ""
+                        while True:
+                            line = resp.readline()
+                            if not line:
+                                break
+                            line_str = line.decode("utf-8", errors="replace").strip()
+                            if line_str.startswith("data:"):
+                                data_part = line_str[5:].strip()
+                                if data_part != "[DONE]":
+                                    try:
+                                        c_data = json.loads(data_part)
+                                        delta = c_data.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                        if delta:
+                                            accumulated += delta
+                                    except Exception:
+                                        pass
+
+                        clean_content = robust_clean_json(accumulated)
+
+                        if is_ollama_chat:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/x-ndjson")
+                            self.send_header("Access-Control-Allow-Origin", "*")
+                            self.end_headers()
+                            m_chunk = {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                                "message": {"role": "assistant", "content": clean_content},
+                                "done": False
+                            }
+                            d_chunk = {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "done": True
+                            }
+                            self.wfile.write((json.dumps(m_chunk) + "\n" + json.dumps(d_chunk) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                            return
+                        elif is_ollama_generate:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/x-ndjson")
+                            self.send_header("Access-Control-Allow-Origin", "*")
+                            self.end_headers()
+                            m_chunk = {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime()),
+                                "response": clean_content,
+                                "done": False
+                            }
+                            d_chunk = {
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "done": True
+                            }
+                            self.wfile.write((json.dumps(m_chunk) + "\n" + json.dumps(d_chunk) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                            return
+                        else:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream")
+                            self.send_header("Access-Control-Allow-Origin", "*")
+                            self.end_headers()
+                            chunk_obj = {
+                                "id": "chatcmpl-phonegpu",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": payload.get("model", current_model_name or "phone-gpu"),
+                                "choices": [{"index": 0, "delta": {"content": clean_content}, "finish_reason": "stop"}]
+                            }
+                            self.wfile.write(f"data: {json.dumps(chunk_obj)}\n\ndata: [DONE]\n\n".encode("utf-8"))
+                            self.wfile.flush()
+                            return
+
+                    # Standard streaming responses for conversational prompts
                     self.send_response(resp.status)
                     is_sse = False
                     for k, v in resp.headers.items():
@@ -1544,6 +1841,8 @@ if __name__ == "__main__":
     print(f"[*] Phone Web UI (Browser)     : http://localhost:{PORT}")
     print(f"[*] Phone Base URL (Same Phone): http://127.0.0.1:{PORT}/v1  <-- IN-APP API")
     print(f"[*] Phone Base URL (Alt)       : http://localhost:{PORT}/v1")
+    print(f"[*] Phone Ollama API (Port 8080): http://127.0.0.1:{PORT}/api")
+    print(f"[*] Phone Ollama API (Default)  : http://127.0.0.1:11434/api")
     print(f"[*] PC Wi-Fi Web UI            : http://{ip}:{PORT}")
     print(f"[*] PC Wi-Fi Base URL          : http://{ip}:{PORT}/v1")
     print(f"[*] PC USB Port Forward        : adb forward tcp:{PORT} tcp:{PORT}")
@@ -1568,6 +1867,18 @@ if __name__ == "__main__":
             start_llama_server(preferred)
         except Exception as e:
             print(f"[!] Startup auto-load failed: {e}")
+
+    # Launch secondary Ollama port listener on 11434 if port is available
+    def run_ollama_listener():
+        try:
+            ollama_srv = HTTPServer(("0.0.0.0", 11434), RequestHandler)
+            print("[*] Native Ollama Port 11434   : http://127.0.0.1:11434 (Active & Ready)")
+            ollama_srv.serve_forever()
+        except Exception:
+            pass
+
+    t_ollama = threading.Thread(target=run_ollama_listener, daemon=True)
+    t_ollama.start()
 
     server = HTTPServer(("0.0.0.0", PORT), RequestHandler)
     try:
