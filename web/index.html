@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     :root, [data-theme="dark"] {
       /* Cactus Needle 3: Matte Dark Grey + Crimson */
@@ -959,11 +960,194 @@
       background: var(--bg-surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-xs);
-      padding: 8px 14px;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      position: relative;
+    }
+
+    .input-box.drag-over {
+      border-color: var(--crimson);
+      background: var(--crimson-bg);
+      box-shadow: 0 0 15px var(--crimson-glow);
+    }
+
+    .input-controls-row {
       display: flex;
       align-items: flex-end;
-      gap: 12px;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .attach-media-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-xs);
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+      padding: 0;
+    }
+
+    .attach-media-btn:hover {
+      color: var(--crimson);
+      background: var(--crimson-bg);
+      border-color: var(--crimson-subtle);
+    }
+
+    .attachment-preview-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px dashed var(--border-subtle);
+    }
+
+    .attachment-preview-chip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      padding: 4px 8px;
+      font-size: 0.76rem;
+      max-width: 220px;
+      transition: border-color 0.15s;
+    }
+
+    .attachment-preview-chip:hover {
+      border-color: var(--crimson);
+    }
+
+    .attachment-preview-thumb {
+      width: 26px;
+      height: 26px;
+      border-radius: 3px;
+      object-fit: cover;
+      background: var(--bg-base);
+    }
+
+    .attachment-preview-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-main);
+    }
+
+    .attachment-remove-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0 2px;
+      margin-left: 2px;
+    }
+
+    .attachment-remove-btn:hover {
+      color: var(--crimson);
+    }
+
+    .msg-attachments-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .msg-attachment-item {
+      position: relative;
+      border-radius: var(--radius-xs);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      max-width: 240px;
+      max-height: 200px;
+      cursor: pointer;
+      background: var(--bg-card);
+      transition: transform 0.15s ease, border-color 0.15s ease;
+    }
+
+    .msg-attachment-item:hover {
+      transform: scale(1.02);
+      border-color: var(--crimson);
+    }
+
+    .msg-attachment-item img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 180px;
+      object-fit: cover;
+    }
+
+    .msg-attachment-pdf-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xs);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--text-main);
       transition: border-color 0.15s ease;
+    }
+
+    .msg-attachment-pdf-badge:hover {
+      border-color: var(--crimson);
+    }
+
+    .lightbox-content-wrap {
+      position: relative;
+      max-width: 90vw;
+      max-height: 90vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .lightbox-content-wrap img {
+      max-width: 100%;
+      max-height: 85vh;
+      border-radius: 8px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.85);
+      object-fit: contain;
+    }
+
+    .lightbox-close-btn {
+      position: absolute;
+      top: -14px;
+      right: -14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 18px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+
+    .lightbox-close-btn:hover {
+      color: var(--crimson);
+      border-color: var(--crimson);
     }
 
     .input-box:focus-within {
@@ -1515,14 +1699,30 @@
 
     <!-- Bottom Input Box -->
     <div class="input-wrapper-outer">
-      <div class="input-box">
-        <textarea id="chat-textarea" rows="1" placeholder="Input execution prompt... (Enter to send, Shift+Enter for newline)"></textarea>
-        <button class="send-action-btn" id="send-action-btn" onclick="handleSendAction()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-        </button>
+      <div class="input-box" id="drop-zone-box">
+        <!-- Attachment Previews Container (hidden if empty) -->
+        <div class="attachment-preview-bar" id="attachment-preview-bar" style="display: none;"></div>
+
+        <div class="input-controls-row">
+          <!-- Hidden file input for images & PDFs -->
+          <input type="file" id="media-file-input" accept="image/*,application/pdf" multiple style="display: none;" onchange="handleFileSelect(event)">
+
+          <!-- Attachment Button -->
+          <button type="button" class="attach-media-btn" id="attach-media-btn" title="Attach Image or PDF (Vision / Multimodal)" onclick="openFilePicker()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+            </svg>
+          </button>
+
+          <textarea id="chat-textarea" rows="1" placeholder="Input prompt or drop / paste images & PDFs... (Enter to send, Shift+Enter for newline)"></textarea>
+
+          <button class="send-action-btn" id="send-action-btn" onclick="handleSendAction()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1742,13 +1942,27 @@
     </div>
   </div>
 
+  <!-- Lightbox Modal for Full-Resolution Image Inspection -->
+  <div class="modal-backdrop" id="image-lightbox-modal" style="display: none;" onclick="closeImageLightbox(event)">
+    <div class="lightbox-content-wrap">
+      <button type="button" class="lightbox-close-btn" onclick="closeImageLightbox(event)">&times;</button>
+      <img id="lightbox-img" src="" alt="Enlarged visual buffer">
+    </div>
+  </div>
+
   <script>
+    // Configure PDF.js worker
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+
     // State variables
     let currentModel = null;
     let isGenerating = false;
     let abortController = null;
     let chats = [];
     let activeChatId = null;
+    let pendingAttachments = [];
 
     const ICONS = {
       brain: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1799,6 +2013,7 @@
       // 🟡 6GB RAM TIER
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Google Gemma 2 2B IT", size: "~1.6 GB", ramBadge: "6GB RAM", file: "gemma-2-2b-it-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf", desc: "Google's high-intelligence 2B Gemini-derived model" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Liquid AI LFM3 Omni 2B (Q4_K_M)", size: "~1.05 GB", ramBadge: "6GB RAM", file: "LFM3-Omni-2B-Q4_K_M.gguf", url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/LFM3-Omni-2B-Q4_K_M.gguf", desc: "[LIQUID AI] End-to-end Omni-modal model for text, vision & audio offloading" },
+      { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Liquid AI LFM3 Omni 2B Projector (Vision/Audio)", size: "~480 MB", ramBadge: "Vision mmproj", file: "mmproj-LFM3-Omni-2B-f16.gguf", url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-f16.gguf", desc: "[MMPROJ] Multimodal vision projector required for LFM3 Omni to inspect images & visual inputs" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Llama 3.2 3B Instruct", size: "~2.0 GB", ramBadge: "6GB RAM", file: "Llama-3.2-3B-Instruct-Q4_K_M.gguf", url: "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf", desc: "Recommended sweet-spot for daily chat & writing" },
       { tier: "🟡 FOR 6 GB RAM PHONES (Smart & Balanced)", name: "Qwen 2.5 3B Instruct", size: "~2.1 GB", ramBadge: "6GB RAM", file: "qwen2.5-3b-instruct-q4_k_m.gguf", url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf", desc: "Exceptional code synthesis & math logic" },
 
@@ -1976,7 +2191,7 @@
       }
 
       chat.messages.forEach(msg => {
-        const row = appendMessageElement(msg.role, msg.content, false);
+        const row = appendMessageElement(msg.role, msg.content, false, msg.attachments || []);
         if (msg.metrics && msg.role === 'assistant') {
           const contentEl = row.querySelector('.msg-body');
           if (contentEl) {
@@ -1991,8 +2206,206 @@
       scrollChatToBottom();
     }
 
+    // =========================================================================
+    // MULTIMODAL ATTACHMENT PIPELINE (IMAGES & PDFS)
+    // =========================================================================
+    function openFilePicker() {
+      const input = document.getElementById('media-file-input');
+      if (input) input.click();
+    }
+
+    async function handleFileSelect(event) {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+      await processFiles(files);
+      event.target.value = '';
+    }
+
+    async function processFiles(fileList) {
+      for (const file of fileList) {
+        if (file.type.startsWith('image/')) {
+          try {
+            const imgData = await resizeImage(file);
+            pendingAttachments.push(imgData);
+          } catch (err) {
+            console.error('Failed to process image:', err);
+            alert(`Failed to load image "${file.name}": ${err.message}`);
+          }
+        } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          try {
+            const pdfData = await processPdf(file);
+            pendingAttachments.push(pdfData);
+          } catch (err) {
+            console.error('Failed to process PDF:', err);
+            alert(`Failed to load PDF "${file.name}": ${err.message}`);
+          }
+        } else {
+          alert(`File "${file.name}" is not supported. Please attach an image or PDF document.`);
+        }
+      }
+      renderAttachmentPreviews();
+    }
+
+    function resizeImage(file, maxDimension = 1280, quality = 0.85) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            let width = img.width;
+            let height = img.height;
+            if (width > maxDimension || height > maxDimension) {
+              if (width > height) {
+                height = Math.round((height * maxDimension) / width);
+                width = maxDimension;
+              } else {
+                width = Math.round((width * maxDimension) / height);
+                height = maxDimension;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', quality);
+            resolve({
+              type: 'image',
+              name: file.name,
+              url: dataUrl
+            });
+          };
+          img.onerror = () => reject(new Error('Failed to decode image data'));
+          img.src = e.target.result;
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function processPdf(file, maxPages = 4) {
+      if (!window.pdfjsLib) {
+        throw new Error('PDF.js library is not available');
+      }
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pageCount = pdf.numPages;
+      const pagesToRender = Math.min(pageCount, maxPages);
+      const pageImages = [];
+      let extractedText = '';
+
+      for (let i = 1; i <= pagesToRender; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        pageImages.push({
+          name: `${file.name} - Page ${i}`,
+          url: dataUrl
+        });
+
+        try {
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join(' ').trim();
+          if (pageText) {
+            extractedText += `\n[--- Page ${i} Content ---]\n` + pageText + '\n';
+          }
+        } catch (e) {
+          console.warn('PDF text extraction error for page ' + i, e);
+        }
+      }
+
+      return {
+        type: 'pdf',
+        name: file.name,
+        pageCount: pageCount,
+        images: pageImages,
+        extractedText: extractedText.trim()
+      };
+    }
+
+    function renderAttachmentPreviews() {
+      const bar = document.getElementById('attachment-preview-bar');
+      if (!bar) return;
+      if (pendingAttachments.length === 0) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+        return;
+      }
+      bar.style.display = 'flex';
+      bar.innerHTML = '';
+
+      pendingAttachments.forEach((att, idx) => {
+        const chip = document.createElement('div');
+        chip.className = 'attachment-preview-chip';
+
+        let thumbHtml = '';
+        if (att.type === 'image') {
+          thumbHtml = `<img class="attachment-preview-thumb" src="${att.url}" alt="thumb">`;
+        } else if (att.type === 'pdf') {
+          if (att.images && att.images.length > 0) {
+            thumbHtml = `<img class="attachment-preview-thumb" src="${att.images[0].url}" alt="thumb">`;
+          } else {
+            thumbHtml = `<span style="font-size: 16px;">📄</span>`;
+          }
+        }
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'attachment-preview-name';
+        nameSpan.title = att.name;
+        nameSpan.innerText = att.type === 'pdf' ? `${att.name} (${att.pageCount}p)` : att.name;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'attachment-remove-btn';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.title = 'Remove attachment';
+        removeBtn.onclick = (e) => {
+          e.stopPropagation();
+          removeAttachment(idx);
+        };
+
+        chip.innerHTML = thumbHtml;
+        chip.appendChild(nameSpan);
+        chip.appendChild(removeBtn);
+        bar.appendChild(chip);
+      });
+    }
+
+    function removeAttachment(index) {
+      if (index >= 0 && index < pendingAttachments.length) {
+        pendingAttachments.splice(index, 1);
+        renderAttachmentPreviews();
+      }
+    }
+
+    function openImageLightbox(url) {
+      const modal = document.getElementById('image-lightbox-modal');
+      const img = document.getElementById('lightbox-img');
+      if (modal && img) {
+        img.src = url;
+        modal.style.display = 'flex';
+      }
+    }
+
+    function closeImageLightbox(event) {
+      if (event) event.stopPropagation();
+      const modal = document.getElementById('image-lightbox-modal');
+      if (modal) {
+        modal.style.display = 'none';
+        const img = document.getElementById('lightbox-img');
+        if (img) img.src = '';
+      }
+    }
+
     function setupInputAutoResize() {
       const textarea = document.getElementById('chat-textarea');
+      const dropZone = document.getElementById('drop-zone-box');
+
       textarea.addEventListener('input', () => {
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
@@ -2004,6 +2417,49 @@
           handleSendAction();
         }
       });
+
+      // Clipboard Paste listener (Images & Files)
+      textarea.addEventListener('paste', async (e) => {
+        const clipboardItems = e.clipboardData?.items;
+        if (!clipboardItems) return;
+        const filesToProcess = [];
+        for (const item of clipboardItems) {
+          if (item.kind === 'file') {
+            const file = item.getAsFile();
+            if (file) filesToProcess.push(file);
+          }
+        }
+        if (filesToProcess.length > 0) {
+          await processFiles(filesToProcess);
+        }
+      });
+
+      // Drag and drop onto the input box
+      if (dropZone) {
+        ['dragenter', 'dragover'].forEach(eventName => {
+          dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('drag-over');
+          }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+          dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('drag-over');
+          }, false);
+        });
+
+        dropZone.addEventListener('drop', async (e) => {
+          const dt = e.dataTransfer;
+          const files = dt?.files;
+          if (files && files.length > 0) {
+            await processFiles(files);
+          }
+        }, false);
+      }
     }
 
     // =========================================================================
@@ -2151,7 +2607,8 @@
 
       const input = document.getElementById('chat-textarea');
       const text = input.value.trim();
-      if (!text) return;
+      const hasAttachments = pendingAttachments.length > 0;
+      if (!text && !hasAttachments) return;
 
       if (!currentModel) {
         alert('Please load a model first using the Models button at the top!');
@@ -2164,7 +2621,8 @@
 
       // Update Chat title if it's the first message
       if (chat.messages.length === 0) {
-        chat.title = text.slice(0, 30) + (text.length > 30 ? '...' : '');
+        const titleSource = text || (hasAttachments ? `[Media: ${pendingAttachments[0].name}]` : 'Conversation');
+        chat.title = titleSource.slice(0, 30) + (titleSource.length > 30 ? '...' : '');
         renderSidebarChats();
       }
 
@@ -2172,13 +2630,18 @@
       const hero = document.getElementById('hero-view');
       if (hero) hero.remove();
 
+      // Snapshot attachments and reset input state
+      const attached = [...pendingAttachments];
+      pendingAttachments = [];
+      renderAttachmentPreviews();
+
       // Reset textarea
       input.value = '';
       input.style.height = 'auto';
 
       // Push User Message
-      chat.messages.push({ role: 'user', content: text });
-      appendMessageElement('user', text, true);
+      chat.messages.push({ role: 'user', content: text, attachments: attached });
+      appendMessageElement('user', text, true, attached);
       saveChatsToStorage();
 
       // Prepare Assistant Stream Bubble
@@ -2268,10 +2731,50 @@
           });
         }
         for (const m of chat.messages) {
-          cleanMessages.push({
-            role: m.role,
-            content: m.content
-          });
+          if (m.role === 'user' && m.attachments && m.attachments.length > 0) {
+            const contentParts = [];
+            let promptText = m.content || '';
+
+            // Enrich prompt with extracted PDF text if available
+            m.attachments.forEach(att => {
+              if (att.type === 'pdf' && att.extractedText) {
+                promptText += `\n\n[Document Content from ${att.name}]:\n${att.extractedText}`;
+              }
+            });
+
+            if (promptText.trim()) {
+              contentParts.push({ type: 'text', text: promptText.trim() });
+            } else {
+              contentParts.push({ type: 'text', text: 'Analyze and describe the attached media in detail.' });
+            }
+
+            // Append all image attachments and rendered PDF page images
+            m.attachments.forEach(att => {
+              if (att.type === 'image') {
+                contentParts.push({
+                  type: 'image_url',
+                  image_url: { url: att.url }
+                });
+              } else if (att.type === 'pdf' && att.images) {
+                att.images.forEach(img => {
+                  contentParts.push({
+                    type: 'image_url',
+                    image_url: { url: img.url }
+                  });
+                });
+              }
+            });
+
+            cleanMessages.push({
+              role: m.role,
+              content: contentParts
+            });
+          } else {
+            cleanMessages.push({
+              role: m.role,
+              content: m.content
+            });
+          }
         }
 
         const isLFM = currentModel && (currentModel.toLowerCase().includes('lfm') || currentModel.toLowerCase().includes('liquid'));
@@ -2395,7 +2898,7 @@
       handleSendAction();
     }
 
-    function appendMessageElement(role, text, shouldScroll = true) {
+    function appendMessageElement(role, text, shouldScroll = true, attachments = []) {
       const container = document.getElementById('chat-view');
       const row = document.createElement('div');
       row.className = `message-row ${role}`;
@@ -2406,8 +2909,45 @@
 
       const body = document.createElement('div');
       body.className = 'msg-body';
-      if (text) {
-        body.innerHTML = role === 'user' ? escapeHtml(text) : marked.parse(text);
+
+      if (attachments && attachments.length > 0) {
+        const grid = document.createElement('div');
+        grid.className = 'msg-attachments-grid';
+        attachments.forEach(att => {
+          if (att.type === 'image') {
+            const item = document.createElement('div');
+            item.className = 'msg-attachment-item';
+            item.title = 'Click to enlarge';
+            item.innerHTML = `<img src="${att.url}" alt="${escapeHtml(att.name || 'Image')}">`;
+            item.onclick = () => openImageLightbox(att.url);
+            grid.appendChild(item);
+          } else if (att.type === 'pdf') {
+            const badge = document.createElement('div');
+            badge.className = 'msg-attachment-pdf-badge';
+            badge.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg> <div><strong>${escapeHtml(att.name)}</strong> <span style="font-size:0.7rem; color:var(--text-dim); display:block;">PDF Document (${att.pageCount || 1} pages rendered)</span></div>`;
+            grid.appendChild(badge);
+            if (att.images && att.images.length > 0) {
+              att.images.forEach(pImg => {
+                const item = document.createElement('div');
+                item.className = 'msg-attachment-item';
+                item.title = pImg.name;
+                item.innerHTML = `<img src="${pImg.url}" alt="${escapeHtml(pImg.name)}">`;
+                item.onclick = () => openImageLightbox(pImg.url);
+                grid.appendChild(item);
+              });
+            }
+          }
+        });
+        body.appendChild(grid);
+        if (text) {
+          const textDiv = document.createElement('div');
+          textDiv.className = 'msg-text-content';
+          textDiv.innerHTML = role === 'user' ? escapeHtml(text).replace(/\n/g, '<br>') : marked.parse(text);
+          if (role === 'assistant') attachCodeCopyButtons(textDiv);
+          body.appendChild(textDiv);
+        }
+      } else if (text) {
+        body.innerHTML = role === 'user' ? escapeHtml(text).replace(/\n/g, '<br>') : marked.parse(text);
         if (role === 'assistant') attachCodeCopyButtons(body);
       }
 

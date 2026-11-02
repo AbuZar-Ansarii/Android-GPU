@@ -14,6 +14,7 @@ import socket
 import signal
 import ssl
 import shutil
+import base64
 import urllib.request
 import urllib.error
 import subprocess
@@ -220,6 +221,60 @@ def find_matching_mmproj(model_path):
             except Exception:
                 pass
     return None
+
+def resolve_image_url_to_base64(url):
+    """
+    Resolve remote HTTP/HTTPS image URL to a self-contained base64 data URI.
+    Ensures llama-server on Android/Termux does not fail if external outbound network
+    or SSL verification is restricted.
+    """
+    if not url or not isinstance(url, str):
+        return url
+    if url.startswith("data:"):
+        return url
+    if url.startswith("http://") or url.startswith("https://"):
+        try:
+            ctx = ssl._create_unverified_context()
+            req = urllib.request.Request(url, headers={"User-Agent": "PhoneAsGPU/2.0 (Multimodal Agent)"})
+            with urllib.request.urlopen(req, context=ctx, timeout=12) as resp:
+                content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                img_bytes = resp.read()
+                b64_str = base64.b64encode(img_bytes).decode("utf-8")
+                return f"data:{content_type};base64,{b64_str}"
+        except Exception as e:
+            print(f"[!] Warning: Could not pre-fetch remote image URL {url}: {e}")
+            return url
+    return url
+
+def normalize_multimodal_payload(payload):
+    """
+    Scan OpenAI messages in payload for vision / image_url content items.
+    Converts any remote HTTP URLs to base64 data URIs so llama-server can process
+    them offline and reliably. Returns (modified_payload, has_images).
+    """
+    if not isinstance(payload, dict):
+        return payload, False
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload, False
+
+    has_images = False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    has_images = True
+                    img_data = part.get("image_url")
+                    if isinstance(img_data, dict) and "url" in img_data:
+                        img_data["url"] = resolve_image_url_to_base64(img_data["url"])
+                    elif isinstance(img_data, str):
+                        part["image_url"] = {"url": resolve_image_url_to_base64(img_data)}
+    return payload, has_images
 
 def detect_cpu_topology():
     """
@@ -449,6 +504,10 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     # Detect multimodal projector (for LFM3 Omni, LLaVA, etc.)
     if not mmproj_path:
         mmproj_path = find_matching_mmproj(model_path)
+
+    # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
+    if mmproj_path and os.path.isfile(mmproj_path) and ctx_size < 4096:
+        ctx_size = 4096
 
     # Acquire guaranteed free port
     active_port = find_free_port(LLAMA_PORT)
@@ -939,11 +998,17 @@ class RequestHandler(BaseHTTPRequestHandler):
             "/v1/completions", "/completions",
             "/v1/embeddings", "/embeddings"
         ):
-            # 1. Verify or auto-load model if none currently active
+            # Normalize and resolve any multimodal image inputs (AI agents passing remote URLs or base64 data URIs)
+            payload, has_images = normalize_multimodal_payload(payload)
+            body = json.dumps(payload).encode("utf-8")
+
+            # 1. Verify or auto-load model if none currently active, or switch to multimodal model if images provided
             with state_lock:
                 loaded = (llama_process is not None and llama_process.poll() is None)
+                active_has_mmproj = bool(active_runtime_config.get("mmproj"))
 
-            if not loaded:
+            # Auto-mount model if not loaded OR switch to multimodal model if images provided but current model is text-only
+            if not loaded or (has_images and not active_has_mmproj):
                 req_model = payload.get("model") if isinstance(payload, dict) else None
                 available = scan_models(include_downloads=True)
                 target_path = None
@@ -953,12 +1018,19 @@ class RequestHandler(BaseHTTPRequestHandler):
                             if req_model.lower() in m["name"].lower() or req_model.lower() in m["path"].lower():
                                 target_path = m["path"]
                                 break
+                    # If request has images and no specific vision model was matched, find an omni/vision model
+                    if (not target_path or not active_has_mmproj) and has_images:
+                        for m in available:
+                            if any(k in m["name"].lower() for k in ["omni", "vl", "vision", "llava"]):
+                                target_path = m["path"]
+                                break
                     if not target_path:
                         target_path = available[0]["path"]
                     
-                    print(f"[*] Auto-loading model for incoming OpenAI API request: {os.path.basename(target_path)}")
+                    reason = "multimodal vision input" if has_images else "incoming OpenAI API request"
+                    print(f"[*] Auto-loading model for {reason}: {os.path.basename(target_path)}")
                     try:
-                        start_llama_server(target_path)
+                        start_llama_server(target_path, ctx_size=4096 if has_images else 2048)
                         with state_lock:
                             loaded = (llama_process is not None and llama_process.poll() is None)
                     except Exception as e:

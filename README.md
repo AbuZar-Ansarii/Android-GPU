@@ -271,7 +271,7 @@ Add this to your `config.json`:
 ```python
 from openai import OpenAI
 
-# Works in Termux on the phone or on your PC!
+# Works in Termux on the phone (127.0.0.1:8080/v1) or on PC (localhost:8080/v1)
 client = OpenAI(
     base_url="http://127.0.0.1:8080/v1",  # Use http://localhost:8080/v1 on PC
     api_key="phone-gpu"
@@ -287,14 +287,92 @@ response = client.chat.completions.create(
 
 print(response.choices[0].message.content)
 ```
-    model="local-phone-model",
+
+---
+
+## 👁️ Multimodal Vision & Document Intelligence (Images & PDFs)
+
+Android-GPU includes native multimodal vision support designed for **Liquid AI LFM3 Omni 2B**, LLaVA, and vision-enabled models.
+
+### 🖼️ In the Web UI
+* **📎 Attach Any Media:** Click the attachment button, drag & drop files onto the prompt box, or paste directly from your clipboard (`Ctrl+V` / `Cmd+V`).
+* **📸 Images:** Supports PNG, JPEG, WEBP, and GIF. Images are automatically optimized and resized client-side to prevent network bottlenecks over mobile loopback.
+* **📄 PDFs with Zero Server Dependencies:** Upload multi-page PDF documents. The in-browser engine (PDF.js) automatically renders the pages as high-resolution visual canvases for the vision model to inspect (charts, diagrams, tables, and document layout) while extracting text for 100% precision context injection.
+* **🔍 Full-Resolution Lightbox:** Click on any attached thumbnail in the chat thread to inspect it in full high resolution.
+
+---
+
+### 🤖 Autonomous AI Agents (Vision via Base URL)
+
+If you are building an AI agent (with **LangChain**, **AutoGen**, **CrewAI**, **LlamaIndex**, or the **OpenAI SDK**) that needs visual perception (e.g. inspecting web screenshots, analyzing diagrams, reading documents), you can pass images directly to the OpenAI-compatible Base URL:
+
+* **On the Same Phone:** `http://127.0.0.1:8080/v1`
+* **On PC over USB Tunnel:** `http://localhost:8080/v1`
+
+#### How the Engine Handles Vision Payloads:
+1. **Both Base64 & Remote URLs Supported:** Agents can send base64 data URIs (`data:image/jpeg;base64,...`) or remote URLs (`https://example.com/photo.jpg`). The server pre-fetches remote URLs into base64 before passing them to `llama-server`, preventing DNS or SSL failures in mobile environments.
+2. **Dynamic Vision Context Scaling:** When an image is detected, the context buffer automatically scales to 4096+ tokens to accommodate the visual projector tokens (~576–1152 tokens per image) without running out of context.
+3. **Smart Model Auto-Switching:** If a text-only model is currently loaded when an image payload arrives, the backend automatically switches to an available Omni/vision model (e.g. `LFM3-Omni-2B-Q4_K_M.gguf` with `mmproj-LFM3-Omni-2B-f16.gguf`).
+
+#### Python AI Agent Example (Multimodal Vision)
+```python
+import base64
+from openai import OpenAI
+
+# 1. Initialize client pointing to your phone
+client = OpenAI(
+    base_url="http://127.0.0.1:8080/v1",  # or http://localhost:8080/v1 on PC
+    api_key="phone-gpu"
+)
+
+# 2. Encode local image to base64
+with open("screenshot.png", "rb") as image_file:
+    base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+
+# 3. Request visual analysis
+response = client.chat.completions.create(
+    model="LFM3-Omni-2B-Q4_K_M.gguf",
     messages=[
-        {"role": "system", "content": "You are an expert AI assistant running on a smartphone."},
-        {"role": "user", "content": "Explain how distributed computing works in 2 sentences."}
-    ]
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What do you see in this screenshot? Extract any key metrics and summarize the chart."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_image}"
+                        # Remote URLs like "https://example.com/chart.jpg" are also supported!
+                    }
+                }
+            ]
+        }
+    ],
+    max_tokens=500
 )
 
 print(response.choices[0].message.content)
+```
+
+#### cURL Agent Example
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer phone-gpu" \
+  -d '{
+    "model": "LFM3-Omni-2B-Q4_K_M.gguf",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Describe this architecture diagram in detail."},
+          {"type": "image_url", "image_url": {"url": "https://raw.githubusercontent.com/AbuZar-Ansarii/Android-GPU/main/web/favicon.png"}}
+        ]
+      }
+    ]
+  }'
 ```
 
 ---
