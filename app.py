@@ -196,6 +196,14 @@ PAIRED_PROJECTORS = {
     "lfm3-omni-2b": {
         "filename": "mmproj-LFM3-Omni-2B-F16.gguf",
         "url": "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/main/mmproj-LFM3-Omni-2B-F16.gguf"
+    },
+    "minicpm-v": {
+        "filename": "mmproj-model-f16.gguf",
+        "url": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf"
+    },
+    "moondream": {
+        "filename": "moondream2-mmproj-f16.gguf",
+        "url": "https://huggingface.co/vikhyatk/moondream2/resolve/main/moondream2-mmproj-f16.gguf"
     }
 }
 
@@ -211,12 +219,33 @@ def find_all_projectors(extra_dirs=None):
         "/sdcard/Downloads",
         "/storage/emulated/0/Download",
         "/storage/emulated/0/Downloads",
+        "/sdcard/models",
+        "/storage/emulated/0/models",
+        "/sdcard/Documents",
+        "/storage/emulated/0/Documents",
         os.path.expanduser("~/storage/downloads"),
-        os.path.expanduser("~/storage/shared/Download")
+        os.path.expanduser("~/storage/shared/Download"),
+        os.path.expanduser("~/storage/shared"),
+        os.path.expanduser("~/models")
     ]
+
+    # Dynamically scan external SD cards on Android
+    try:
+        if os.path.isdir("/storage"):
+            for entry in os.listdir("/storage"):
+                if entry not in ("emulated", "self", "knox"):
+                    ext_dl = os.path.join("/storage", entry, "Download")
+                    if os.path.isdir(ext_dl) and ext_dl not in search_dirs:
+                        search_dirs.append(ext_dl)
+                    ext_root = os.path.join("/storage", entry)
+                    if os.path.isdir(ext_root) and ext_root not in search_dirs:
+                        search_dirs.append(ext_root)
+    except Exception:
+        pass
+
     if extra_dirs:
         for ed in extra_dirs:
-            if ed and ed not in search_dirs:
+            if ed and ed not in search_dirs and os.path.isdir(ed):
                 search_dirs.insert(0, ed)
 
     projectors = []
@@ -270,6 +299,8 @@ def find_matching_mmproj(model_path):
 
     # Discover all projectors including in model_dir and its subdirectories
     all_projs = find_all_projectors(extra_dirs=[model_dir, os.path.dirname(model_dir)])
+    if not all_projs:
+        return None
 
     # 1. Direct match for LFM3 Omni projector
     if "lfm3" in model_stem and "omni" in model_stem:
@@ -281,21 +312,31 @@ def find_matching_mmproj(model_path):
                 return p["path"]
 
     # 2. Check for exact model stem matches (e.g. mmproj-<model_filename>)
-    clean_stem = model_stem.replace("-q4_k_m", "").replace("-q4_0", "").replace("-f16", "")
+    clean_stem = model_stem.replace("-q4_k_m", "").replace("-q4_0", "").replace("-f16", "").replace("-q8_0", "")
     for p in all_projs:
         p_name = p["name"].lower()
         if clean_stem in p_name or model_base.lower().replace(".gguf", "") in p_name:
             return p["path"]
 
-    # 3. Match family keywords
-    for p in all_projs:
-        p_name = p["name"].lower()
-        if any(kw in model_stem and kw in p_name for kw in ["omni", "lfm", "llava", "minicpm", "vision", "audio", "moondream", "smolvlm", "qwen"]):
-            return p["path"]
-
-    # 4. Fallback to any discovered projector if only one exists
-    if len(all_projs) == 1:
-        return all_projs[0]["path"]
+    # 3. Match family keywords (precise matching without false positive on pure text models)
+    family_pairs = [
+        ("qwen2.5-vl", ["qwen2.5-vl", "qwen2_5_vl", "qwen-vl"]),
+        ("qwen2-vl", ["qwen2-vl", "qwen2_vl", "qwen-vl"]),
+        ("minicpm-v", ["minicpm-v", "minicpm"]),
+        ("smolvlm", ["smolvlm"]),
+        ("moondream", ["moondream"]),
+        ("llava", ["llava"]),
+        ("internvl", ["internvl"]),
+        ("paligemma", ["paligemma"]),
+        ("bakllava", ["bakllava"]),
+        ("omni", ["omni", "lfm3"])
+    ]
+    for fam_key, proj_keys in family_pairs:
+        if fam_key in model_stem:
+            for p in all_projs:
+                p_name = p["name"].lower()
+                if any(pk in p_name for pk in proj_keys):
+                    return p["path"]
 
     return None
 
@@ -890,60 +931,50 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
 
     model_name_lower = os.path.basename(model_path).lower()
 
-    # Resolve modality profile: "text", "vision", "omni", or "auto"
-    if modality == "auto":
-        if mmproj_path or find_matching_mmproj(model_path):
-            if "omni" in model_name_lower:
-                modality = "omni"
-            else:
-                modality = "vision"
-        else:
-            modality = "text"
+    # Detect natural model modality from filename
+    is_naturally_omni = "omni" in model_name_lower
+    is_naturally_vision = any(k in model_name_lower for k in [
+        "vision", "-vl", "_vl", "vl-", "vl_", "qwen2.5-vl", "qwen2-vl", "qwen-vl",
+        "llava", "minicpm-v", "moondream", "smolvlm", "internvl", "paligemma", "florence", "bakllava", "obsidian"
+    ])
+    model_has_vision_capability = bool(is_naturally_omni or is_naturally_vision)
 
-    if modality == "text":
-        mmproj_path = None
-    elif modality in ("vision", "omni"):
-        if not mmproj_path:
+    notice_msg = None
+    target_modality = modality
+
+    if target_modality == "auto":
+        if model_has_vision_capability:
+            target_modality = "omni" if is_naturally_omni else "vision"
+        else:
+            target_modality = "text"
+
+    # Multimodal projector resolution if vision or omni was requested or detected
+    if target_modality in ("vision", "omni"):
+        if not mmproj_path or not os.path.isfile(mmproj_path):
             mmproj_path = find_matching_mmproj(model_path)
+
         if not mmproj_path or not os.path.isfile(mmproj_path):
             all_projs = find_all_projectors(extra_dirs=[os.path.dirname(os.path.abspath(model_path))])
             if all_projs:
-                matched = [p["path"] for p in all_projs if any(k in model_name_lower and k in p["name"].lower() for k in ["lfm3", "omni", "llava", "minicpm", "qwen", "smolvlm"])]
-                mmproj_path = matched[0] if matched else all_projs[0]["path"]
+                matched = [p["path"] for p in all_projs if any(k in model_name_lower and k in p["name"].lower() for k in ["lfm3", "omni", "llava", "minicpm", "qwen", "smolvlm", "moondream"])]
+                if matched:
+                    mmproj_path = matched[0]
 
-        # If projector is missing from storage, attempt automatic download for known paired models (e.g. LFM3 Omni)
+        # GRACEFUL FALLBACK: If mmproj is not found on device, DO NOT CRASH!
+        # Load the model immediately as a fast text LLM!
         if not mmproj_path or not os.path.isfile(mmproj_path):
-            target_proj_info = None
-            for pkey, pinfo in PAIRED_PROJECTORS.items():
-                if pkey in model_name_lower and not model_name_lower.startswith("mmproj"):
-                    target_proj_info = pinfo
-                    break
-
-            if target_proj_info:
-                proj_file = target_proj_info["filename"]
-                proj_url = target_proj_info["url"]
-                proj_dest = os.path.join(MODELS_DIR, proj_file)
-                print(f"[*] Multimodal projector missing on device for {os.path.basename(model_path)}.")
-                print(f"[*] Auto-downloading companion visual projector: {proj_file}...")
-                try:
-                    ctx = ssl._create_unverified_context()
-                    req = urllib.request.Request(proj_url, headers={"User-Agent": "Mozilla/5.0 (Android; Mobile)"})
-                    with urllib.request.urlopen(req, context=ctx, timeout=120) as resp, open(proj_dest, "wb") as pf:
-                        shutil.copyfileobj(resp, pf)
-                    if os.path.isfile(proj_dest) and os.path.getsize(proj_dest) > 1024 * 1024:
-                        mmproj_path = proj_dest
-                        print(f"[✓] Successfully auto-downloaded paired projector: {proj_file}")
-                except Exception as pe:
-                    print(f"[!] Warning: Auto-download of projector failed: {pe}")
-
-        if not mmproj_path or not os.path.isfile(mmproj_path):
-            raise RuntimeError(
-                f"Multimodal Projector Missing: {modality.title()} mode requires a paired mmproj projector (.gguf). "
-                f"Please download mmproj-LFM3-Omni-2B-F16.gguf or select 'Text Only' mode to run this model as a standard text LLM."
-            )
-        # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
-        if ctx_size < 4096:
-            ctx_size = 4096
+            print(f"[*] Notice: Multimodal projector not found on device for {os.path.basename(model_path)}.")
+            print(f"[*] Gracefully loading {os.path.basename(model_path)} in Text-Only mode...")
+            target_modality = "text"
+            mmproj_path = None
+            notice_msg = "Model loaded in Text-Only mode. (Companion mmproj projector was not found in storage; vision is disabled until mmproj is downloaded)."
+        else:
+            # Multimodal vision models require higher context window (minimum 4096 tokens) for image tokens
+            if ctx_size < 4096:
+                ctx_size = 4096
+    else:
+        # Explicit text-only mode
+        mmproj_path = None
 
     # Acquire guaranteed free port
     active_port = find_free_port(LLAMA_PORT)
@@ -967,7 +998,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     accel_args = list(base_args)
 
     # Omni architecture hyperparameter tuning
-    if modality == "omni":
+    if target_modality == "omni":
         accel_args.extend(["--repeat-penalty", "1.05", "--temp", "0.4"])
 
     # Flash Attention (reduces memory bandwidth and attention overhead)
@@ -989,7 +1020,7 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
     print("      🚀 STARTING ACCELERATED LLAMA-SERVER")
     print("=" * 60)
     print(f"[*] Model       : {os.path.basename(model_path)}")
-    print(f"[*] Modality    : {modality.upper()} ({'Vision/Omni Multimodal' if modality in ('vision', 'omni') else 'Text-Only LLM'})")
+    print(f"[*] Modality    : {target_modality.upper()} ({'Vision/Omni Multimodal' if target_modality in ('vision', 'omni') else 'Text-Only LLM'})")
     if mmproj_path and os.path.isfile(mmproj_path):
         print(f"[*] Projector   : {os.path.basename(mmproj_path)} (Multimodal Active)")
     print(f"[*] Port        : {active_port}")
@@ -1061,6 +1092,42 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
         except Exception as e:
             print(f"[!] Baseline launch error: {e}")
 
+    # Try 3: If `--mmproj` was attached and caused startup failure/crash, fallback to Text-Only without `--mmproj`
+    if (not launch_success or (proc and proc.poll() is not None)) and mmproj_path:
+        print("[!] Projector launch failed or crashed. Purging processes and recovering in Text-Only mode without --mmproj...")
+        kill_all_llama_processes()
+
+        fallback_port_3 = find_free_port(current_llama_port + 1)
+        current_llama_port = fallback_port_3
+
+        text_only_cmd = [arg for arg in base_args if arg != "--mmproj" and arg != mmproj_path]
+        if "--port" in text_only_cmd:
+            port_idx = text_only_cmd.index("--port")
+            text_only_cmd[port_idx + 1] = str(fallback_port_3)
+
+        used_cmd = text_only_cmd
+        try:
+            with open(server_log_path, "a") as log_file:
+                log_file.write(f"\n--- Fallback to Text-Only (No Projector) at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                log_file.write(f"Command: {' '.join(text_only_cmd)}\n")
+                log_file.flush()
+
+            log_out = open(server_log_path, "a")
+            proc = subprocess.Popen(
+                text_only_cmd,
+                stdout=log_out,
+                stderr=log_out,
+                env=env,
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None
+            )
+            launch_success = _poll_server_health(proc, timeout_sec=35, port=fallback_port_3)
+            if launch_success:
+                target_modality = "text"
+                mmproj_path = None
+                notice_msg = "Model recovered and loaded in Text-Only mode (attached mmproj failed to mount)."
+        except Exception as e:
+            print(f"[!] Text-only fallback launch error: {e}")
+
     if not launch_success or proc is None or proc.poll() is not None:
         err_msg = ""
         if os.path.isfile(server_log_path):
@@ -1092,7 +1159,9 @@ def start_llama_server(model_path, threads=None, ctx_size=2048, flash_attn=True,
             "gpu_layers": gpu_layers if (is_accel and features.get("gpu_layers")) else 0,
             "pinned_cores": cpu_topo.get("affinity_str") if pin_cores else None,
             "mmproj": os.path.basename(mmproj_path) if (mmproj_path and os.path.isfile(mmproj_path)) else None,
-            "modality": modality
+            "modality": target_modality,
+            "has_vision_capability": model_has_vision_capability,
+            "notice": notice_msg
         }
 
 def scan_models(include_downloads=True):
@@ -1104,14 +1173,21 @@ def scan_models(include_downloads=True):
         fl = fname.lower()
         is_proj = ("mmproj" in fl or "projector" in fl)
         
-        if "omni" in fl:
+        is_omni = ("omni" in fl)
+        is_vision = any(k in fl for k in [
+            "vision", "-vl", "_vl", "vl-", "vl_", "qwen2.5-vl", "qwen2-vl", "qwen-vl",
+            "llava", "minicpm-v", "moondream", "smolvlm", "internvl", "paligemma", "florence", "bakllava", "obsidian"
+        ])
+
+        if is_omni:
             modality = "omni"
-        elif any(k in fl for k in ["vision", "vl", "llava", "minicpm", "moondream", "smolvlm", "qwen"]):
+        elif is_vision:
             modality = "vision"
         else:
             modality = "text"
 
-        paired = find_matching_mmproj(path) if (modality in ("vision", "omni") and not is_proj) else None
+        has_vision_capability = bool(is_omni or is_vision)
+        paired = find_matching_mmproj(path) if (has_vision_capability and not is_proj) else None
 
         try:
             size_bytes = os.path.getsize(path)
@@ -1129,6 +1205,8 @@ def scan_models(include_downloads=True):
             "location": location,
             "is_projector": is_proj,
             "detected_modality": modality,
+            "has_vision_capability": has_vision_capability,
+            "has_companion_projector": bool(paired),
             "paired_mmproj": paired,
             "paired_mmproj_name": os.path.basename(paired) if paired else None
         }
@@ -1154,11 +1232,25 @@ def scan_models(include_downloads=True):
         dl_dirs = [
             "/sdcard/Download",
             "/sdcard/Downloads",
+            "/sdcard/models",
+            "/sdcard/Documents",
             "/storage/emulated/0/Download",
             "/storage/emulated/0/Downloads",
+            "/storage/emulated/0/models",
+            "/storage/emulated/0/Documents",
             os.path.expanduser("~/storage/downloads"),
             os.path.expanduser("~/storage/shared/Download")
         ]
+        # Check potential external microSD storage mount points
+        if os.path.exists("/storage"):
+            try:
+                for sub in os.listdir("/storage"):
+                    if sub not in ("emulated", "self"):
+                        cand = os.path.join("/storage", sub, "Download")
+                        if os.path.exists(cand):
+                            dl_dirs.append(cand)
+            except Exception:
+                pass
         for d in dl_dirs:
             if os.path.exists(d):
                 try:
@@ -1566,7 +1658,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {
                     "status": "ok",
                     "model": os.path.basename(model_path),
-                    "config": active_runtime_config
+                    "config": active_runtime_config,
+                    "notice": active_runtime_config.get("notice")
                 })
             except Exception as e:
                 self.send_json(500, {"error": str(e)})

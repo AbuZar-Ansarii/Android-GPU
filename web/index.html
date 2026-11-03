@@ -1694,9 +1694,68 @@
         max-width: 150px;
       }
     }
+
+    /* Floating Toast Notifications */
+    .toast-container {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-width: 440px;
+      width: calc(100% - 36px);
+      pointer-events: none;
+    }
+    .toast-item {
+      pointer-events: auto;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.55);
+      font-size: 0.82rem;
+      line-height: 1.45;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      animation: toastSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      cursor: pointer;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .toast-item.toast-warning {
+      border-color: #f59e0b;
+      background: rgba(24, 20, 10, 0.92);
+      color: #fef3c7;
+    }
+    .toast-item.toast-success {
+      border-color: #10b981;
+      background: rgba(10, 24, 18, 0.92);
+      color: #d1fae5;
+    }
+    .toast-item.toast-error {
+      border-color: var(--crimson);
+      background: rgba(28, 12, 14, 0.92);
+      color: #ffe4e6;
+    }
+    .toast-item.fade-out {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    @keyframes toastSlideIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
   </style>
 </head>
 <body>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
 
   <!-- Mobile Overlay for Sidebar Drawer -->
   <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar(false)"></div>
@@ -1986,7 +2045,7 @@
             <p style="font-size: 0.77rem; color: var(--text-dim); margin-bottom: 4px;">
               Enter the exact path to any <code>.gguf</code> model file in phone storage or USB:
             </p>
-            <input type="text" id="manual-model-path" class="manual-path-input" placeholder="/sdcard/Download/model.gguf or ~/models/..." />
+            <input type="text" id="manual-model-path" class="manual-path-input" placeholder="/sdcard/Download/model.gguf or ~/models/..." oninput="handleManualPathInput()" />
             
             <!-- Modality Selector -->
             <div style="margin-top: 6px;">
@@ -2819,6 +2878,7 @@
             <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 3px; font-weight: normal;">
               Profile: <span style="color: ${modType === 'omni' ? '#c084fc' : (modType === 'vision' ? '#e63946' : '#10b981')}; font-weight: 700;">${modType.toUpperCase()}</span>
               ${cfg.mmproj ? ` &bull; Projector: <code>${cfg.mmproj}</code>` : ''}
+              ${cfg.notice ? `<div style="color: #f59e0b; font-size: 0.7rem; margin-top: 4px; padding: 4px 8px; background: rgba(245, 158, 11, 0.12); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: var(--radius-xs); line-height: 1.35;">ℹ️ ${cfg.notice}</div>` : ''}
             </div>
           `;
           modalUnloadBtn.style.display = 'inline-flex';
@@ -2827,15 +2887,15 @@
 
           const telemVision = document.getElementById('telem-vision');
           if (telemVision) {
-            if (modType === 'omni') {
+            if (modType === 'omni' && hasMmproj) {
               telemVision.innerText = 'Omni (Vision+Audio)';
               telemVision.style.color = '#c084fc';
-            } else if (hasMmproj || modType === 'vision') {
+            } else if (hasMmproj || (modType === 'vision' && hasMmproj)) {
               telemVision.innerText = 'Active (mmproj)';
               telemVision.style.color = '#10b981';
-            } else if (data.current_model.toLowerCase().includes('omni')) {
-              telemVision.innerText = '⚠️ No mmproj';
-              telemVision.style.color = 'var(--crimson)';
+            } else if (cfg.has_vision_capability || data.current_model.toLowerCase().includes('omni') || data.current_model.toLowerCase().includes('vl')) {
+              telemVision.innerText = 'Text Mode (No mmproj)';
+              telemVision.style.color = '#f59e0b';
             } else {
               telemVision.innerText = 'Text-Only';
               telemVision.style.color = 'var(--text-dim)';
@@ -3257,6 +3317,59 @@
     let selectedManualModality = 'text';
     window.discoveredProjectors = [];
 
+    function showToast(message, type = 'info', duration = 5000) {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const toast = document.createElement('div');
+      toast.className = `toast-item toast-${type}`;
+
+      let icon = 'ℹ️';
+      if (type === 'success') icon = '✓';
+      else if (type === 'warning') icon = '⚠️';
+      else if (type === 'error') icon = '❌';
+
+      toast.innerHTML = `
+        <span style="font-size: 1.1rem; line-height: 1;">${icon}</span>
+        <div style="flex: 1; font-weight: 500;">${escapeHtml(message)}</div>
+      `;
+
+      toast.onclick = () => {
+        toast.classList.add('fade-out');
+        setTimeout(() => toast.remove(), 250);
+      };
+
+      container.appendChild(toast);
+
+      if (duration > 0) {
+        setTimeout(() => {
+          if (toast.parentNode) {
+            toast.classList.add('fade-out');
+            setTimeout(() => toast.remove(), 250);
+          }
+        }, duration);
+      }
+    }
+
+    function handleManualPathInput() {
+      const input = document.getElementById('manual-model-path');
+      if (!input) return;
+      const val = input.value.trim().toLowerCase();
+      if (!val) return;
+
+      if (val.includes('omni')) {
+        selectManualModality('omni');
+      } else if (
+        val.includes('vision') || val.includes('-vl') || val.includes('_vl') ||
+        val.includes('minicpm-v') || val.includes('moondream') || val.includes('smolvlm') ||
+        val.includes('llava') || val.includes('qwen2.5-vl') || val.includes('internvl')
+      ) {
+        selectManualModality('vision');
+      } else if (!val.includes('mmproj') && !val.includes('projector')) {
+        selectManualModality('text');
+      }
+    }
+
     function selectManualModality(mod) {
       selectedManualModality = mod;
       ['text', 'vision', 'omni'].forEach(m => {
@@ -3377,14 +3490,28 @@
         installedModels.forEach(m => {
           const isCurrent = currentModel && m.name === currentModel;
           const detectedMod = m.detected_modality || 'text';
+          const hasProjector = Boolean(m.paired_mmproj || m.has_companion_projector);
           let modBadgeHtml = '';
           if (detectedMod === 'omni') {
-            modBadgeHtml = '<span class="modality-tag modality-tag-omni">🎙️ OMNI</span>';
+            modBadgeHtml = hasProjector ?
+              '<span class="modality-tag modality-tag-omni">🎙️ OMNI</span>' :
+              '<span class="modality-tag modality-tag-omni" style="background: rgba(192, 132, 252, 0.15); border: 1px dashed #c084fc; color: #c084fc;" title="Companion mmproj not found; runs in fast Text-Only mode">🎙️ OMNI (TEXT)</span>';
           } else if (detectedMod === 'vision') {
-            modBadgeHtml = '<span class="modality-tag modality-tag-vision">👁️ VISION</span>';
+            modBadgeHtml = hasProjector ?
+              '<span class="modality-tag modality-tag-vision">👁️ VISION</span>' :
+              '<span class="modality-tag modality-tag-vision" style="background: rgba(230, 57, 70, 0.15); border: 1px dashed #e63946; color: #e63946;" title="Companion mmproj not found; runs in fast Text-Only mode">👁️ VISION (TEXT)</span>';
           } else {
             modBadgeHtml = '<span class="modality-tag modality-tag-text">📝 TEXT</span>';
           }
+
+          let projMeta = '';
+          if (m.paired_mmproj_name) {
+            projMeta = ` &bull; 👁️ mmproj: ${m.paired_mmproj_name}`;
+          } else if (m.has_vision_capability && !hasProjector) {
+            projMeta = ` &bull; <span style="color: #f59e0b;">No mmproj (auto-loads as text LLM)</span>`;
+          }
+
+          const targetModality = hasProjector ? detectedMod : 'auto';
 
           const item = document.createElement('div');
           item.className = 'model-card-row';
@@ -3395,12 +3522,12 @@
                 ${modBadgeHtml}
                 ${isCurrent ? '<span class="status-tag active-tag">ACTIVE BUFFER</span>' : ''}
               </h5>
-              <span>Size: ${m.size} &bull; ${m.location}${m.paired_mmproj_name ? ` &bull; 👁️ mmproj: ${m.paired_mmproj_name}` : ''}</span>
+              <span>Size: ${m.size} &bull; ${m.location}${projMeta}</span>
             </div>
             <div>
               ${isCurrent ? 
                 `<button class="btn btn-danger" onclick="unloadModel()">UNLOAD</button>` : 
-                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this, { modality: '${detectedMod}', mmproj_path: '${m.paired_mmproj || ''}' })">LOAD</button>`
+                `<button class="btn btn-primary" onclick="loadModel('${m.path}', this, { modality: '${targetModality}', mmproj_path: '${m.paired_mmproj || ''}' })">LOAD</button>`
               }
             </div>
           `;
@@ -3618,6 +3745,12 @@
         if (data.status === 'ok') {
           fetchStatus();
           closeModelModal();
+          const notice = data.notice || (data.config && data.config.notice);
+          if (notice) {
+            showToast(notice, 'warning', 7000);
+          } else {
+            showToast(`🚀 ${data.model} successfully mounted and running!`, 'success', 3500);
+          }
         } else {
           alert('Error mounting weights: ' + (data.error || 'Unknown error'));
         }
